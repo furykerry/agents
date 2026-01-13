@@ -77,7 +77,28 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 	claimStart := time.Now()
 	sbx, err := sc.manager.ClaimSandbox(ctx, user.ID.String(), request.TemplateID, infra.ClaimSandboxOptions{
 		Modifier: func(sbx infra.Sandbox) {
-			sbx.SetTimeout(time.Duration(request.Timeout) * time.Second)
+			// The E2B Timeout feature involves three sets of interfaces: create, connect, and pause,
+			// with two behavioral modes based on the `autoPause` parameter during creation:
+			//
+			// - `autoPause = false` (default): Automatically delete Sandbox when timeout
+			// - `autoPause = true`: Pause Sandbox when timeout
+			//
+			// The Timeout feature is implemented through two parameters in the `Sandbox` Infra:
+			//
+			// - During creation (create interface), set the corresponding parameter to `time.Now().Add(timeout)`
+			// - During connection (connect, timeout interfaces), set the corresponding parameter to `time.Now().Add(timeout)` as well
+			// - During pause (pause interface):
+			//   - if autoPause == true: Set `ShutdownTime` to `time.Now().Add(maxTimeout)` and clear `PauseTime`
+			//   - if autoPause == false: Set `ShutdownTime` to `time.Now().Add(maxTimeout)`
+			opts := infra.TimeoutOptions{}
+			if request.AutoPause {
+				opts.ShutdownTime = TimeAfterSeconds(claimStart, sc.maxTimeout)
+				opts.PauseTime = TimeAfterSeconds(claimStart, request.Timeout)
+			} else {
+				opts.ShutdownTime = TimeAfterSeconds(claimStart, request.Timeout)
+			}
+			sbx.SetTimeout(opts)
+
 			annotations := sbx.GetAnnotations()
 			if annotations == nil {
 				annotations = make(map[string]string)
@@ -185,63 +206,20 @@ func (sc *Controller) DeleteSandbox(r *http.Request) (web.ApiResponse[struct{}],
 	}, nil
 }
 
-// SetSandboxTimeout sets the timeout of a claimed sandbox
-func (sc *Controller) SetSandboxTimeout(r *http.Request) (web.ApiResponse[struct{}], *web.ApiError) {
-	err := sc.setSandboxTimeout(r, false)
-	if err != nil {
-		if err.Code != http.StatusNotFound {
-			// Just to follow E2B spec, I don't know why it is designed
-			err.Code = http.StatusInternalServerError
+func (sc *Controller) buildSetTimeoutOptions(autoPause bool, now time.Time, timeoutSeconds int) infra.TimeoutOptions {
+	if autoPause {
+		return infra.TimeoutOptions{
+			PauseTime:    TimeAfterSeconds(now, timeoutSeconds),
+			ShutdownTime: TimeAfterSeconds(now, sc.maxTimeout),
 		}
-		return web.ApiResponse[struct{}]{}, err
 	}
-	return web.ApiResponse[struct{}]{
-		Code: http.StatusNoContent,
-	}, nil
+	return infra.TimeoutOptions{
+		ShutdownTime: TimeAfterSeconds(now, timeoutSeconds),
+	}
 }
 
-func (sc *Controller) setSandboxTimeout(r *http.Request, allowNonRunning bool) *web.ApiError {
-	ctx := r.Context()
-	log := klog.FromContext(ctx)
-
-	var request models.SetTimeoutRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		return &web.ApiError{
-			Message: err.Error(),
-		}
-	}
-	if request.TimeoutSeconds <= 0 || request.TimeoutSeconds > sc.maxTimeout {
-		return &web.ApiError{
-			Code:    http.StatusBadRequest,
-			Message: fmt.Sprintf("timeout should between 30 and %d", sc.maxTimeout),
-		}
-	}
-
-	id := r.PathValue("sandboxID")
-	sbx, apiErr := sc.getSandboxOfUser(ctx, id)
-	if apiErr != nil {
-		return apiErr
-	}
-
-	if !allowNonRunning {
-		state, reason := sbx.GetState()
-		if state != v1alpha1.SandboxStateRunning {
-			log.Info("cannot set sandbox timeout for sandbox not running", "name", sbx.GetName(), "state", state, "reason", reason)
-			return &web.ApiError{
-				Code:    http.StatusConflict,
-				Message: fmt.Sprintf("sandbox %s is not running", sbx.GetName()),
-			}
-		}
-	}
-
-	if err := sbx.SaveTimeout(ctx, time.Duration(request.TimeoutSeconds)*time.Second); err != nil {
-		return &web.ApiError{
-			Message: fmt.Sprintf("Failed to set sandbox timeout: %v", err),
-		}
-	}
-
-	log.Info("sandbox timeout set", "id", id, "timeout", request.TimeoutSeconds)
-	return nil
+func TimeAfterSeconds(now time.Time, afterSeconds int) time.Time {
+	return now.Add(time.Duration(afterSeconds) * time.Second)
 }
 
 type browserHandShake struct {
