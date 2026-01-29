@@ -69,7 +69,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: nil,
 					},
 				},
@@ -86,7 +86,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -115,7 +115,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -145,7 +145,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Generation: 1,
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -172,7 +172,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					DeletionTimestamp: &metav1.Time{Time: time.Now()},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -209,7 +209,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -246,7 +246,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -284,7 +284,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
 					Paused: true,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -322,7 +322,7 @@ func TestSandboxReconciler_Reconcile(t *testing.T) {
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
 					Paused: false,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -532,7 +532,7 @@ func TestSandboxReconciler_ShutdownTime(t *testing.T) {
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
 			ShutdownTime: &pastTime,
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
@@ -593,7 +593,7 @@ func TestSandboxReconcile_WithVolumeClaimTemplates(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -619,7 +619,7 @@ func TestSandboxReconcile_WithVolumeClaimTemplates(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -660,7 +660,7 @@ func TestSandboxReconcile_WithVolumeClaimTemplates(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -714,7 +714,7 @@ func TestSandboxReconcile_WithVolumeClaimTemplates(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{

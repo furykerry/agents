@@ -19,33 +19,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-func TestSandboxSetDefaulter_Handle(t *testing.T) {
+func TestDefaulter_Handle(t *testing.T) {
 	err := v1alpha1.AddToScheme(scheme.Scheme)
 	require.NoError(t, err)
 
 	tests := []struct {
 		name        string
-		sandboxSet  *v1alpha1.SandboxSet
+		sandboxTemplate  *v1alpha1.SandboxTemplate
 		expectAllow bool
 		expectPatch bool
 	}{
 		{
 			name: "AutomountServiceAccountToken is nil, should be set to false",
-			sandboxSet: &v1alpha1.SandboxSet{
+			sandboxTemplate: &v1alpha1.SandboxTemplate{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sbs",
 					Namespace: "default",
 				},
-				Spec: v1alpha1.SandboxSetSpec{
-					Replicas: 3,
-					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
-						Template: &corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{
-									{
-										Name:  "test-container",
-										Image: "nginx:latest",
-									},
+				Spec: v1alpha1.SandboxTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: "nginx:latest",
 								},
 							},
 						},
@@ -57,22 +54,19 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 		},
 		{
 			name: "AutomountServiceAccountToken is true, should be set to false",
-			sandboxSet: &v1alpha1.SandboxSet{
+			sandboxTemplate: &v1alpha1.SandboxTemplate{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sbs",
 					Namespace: "default",
 				},
-				Spec: v1alpha1.SandboxSetSpec{
-					Replicas: 3,
-					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
-						Template: &corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								AutomountServiceAccountToken: ptr.To(true),
-								Containers: []corev1.Container{
-									{
-										Name:  "test-container",
-										Image: "nginx:latest",
-									},
+				Spec: v1alpha1.SandboxTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							AutomountServiceAccountToken: ptr.To(true),
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: "nginx:latest",
 								},
 							},
 						},
@@ -84,17 +78,14 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 		},
 		{
 			name: "No containers, AutomountServiceAccountToken is nil, should be set to false",
-			sandboxSet: &v1alpha1.SandboxSet{
+			sandboxTemplate: &v1alpha1.SandboxTemplate{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sbs",
 					Namespace: "default",
 				},
-				Spec: v1alpha1.SandboxSetSpec{
-					Replicas: 3,
-					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
-						Template: &corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{},
-						},
+				Spec: v1alpha1.SandboxTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{},
 					},
 				},
 			},
@@ -113,12 +104,12 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 
 			decoder := admission.NewDecoder(scheme.Scheme)
 
-			defaulter := &SandboxSetDefaulter{
+			defaulter := &Defaulter{
 				Client:  fakeClient,
 				Decoder: decoder,
 			}
 
-			sbsRaw, err := json.Marshal(tt.sandboxSet)
+			sbsRaw, err := json.Marshal(tt.sandboxTemplate)
 			require.NoError(t, err)
 
 			req := admission.Request{
@@ -143,33 +134,30 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 	}
 }
 
-func TestSandboxSetDefaulter_HandleUpdate(t *testing.T) {
+func TestSandboxTemplateDefaulter_HandleUpdate(t *testing.T) {
 	err := v1alpha1.AddToScheme(scheme.Scheme)
 	require.NoError(t, err)
 
 	tests := []struct {
 		name        string
-		sandboxSet  *v1alpha1.SandboxSet
+		sandboxTemplate  *v1alpha1.SandboxTemplate
 		expectAllow bool
 		expectPatch bool
 	}{
 		{
 			name: "Update with nil AutomountServiceAccountToken, should be set to false",
-			sandboxSet: &v1alpha1.SandboxSet{
+			sandboxTemplate: &v1alpha1.SandboxTemplate{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sbs",
 					Namespace: "default",
 				},
-				Spec: v1alpha1.SandboxSetSpec{
-					Replicas: 5, // Changed replicas
-					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
-						Template: &corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{
-									{
-										Name:  "test-container",
-										Image: "nginx:latest",
-									},
+				Spec: v1alpha1.SandboxTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: "nginx:latest",
 								},
 							},
 						},
@@ -190,12 +178,12 @@ func TestSandboxSetDefaulter_HandleUpdate(t *testing.T) {
 
 			decoder := admission.NewDecoder(scheme.Scheme)
 
-			defaulter := &SandboxSetDefaulter{
+			defaulter := &Defaulter{
 				Client:  fakeClient,
 				Decoder: decoder,
 			}
 
-			sbsRaw, err := json.Marshal(tt.sandboxSet)
+			sbsRaw, err := json.Marshal(tt.sandboxTemplate)
 			require.NoError(t, err)
 
 			req := admission.Request{

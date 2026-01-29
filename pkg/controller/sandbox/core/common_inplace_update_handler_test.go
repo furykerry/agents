@@ -65,7 +65,7 @@ func TestHandleInPlaceUpdateCommon(t *testing.T) {
 					Annotations: map[string]string{},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -110,7 +110,7 @@ func TestHandleInPlaceUpdateCommon(t *testing.T) {
 					},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -155,7 +155,7 @@ func TestHandleInPlaceUpdateCommon(t *testing.T) {
 					},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -241,7 +241,7 @@ func TestHandleInPlaceUpdateCommon_WithUpdateInProgress(t *testing.T) {
 			},
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
@@ -305,7 +305,7 @@ func TestHandleInPlaceUpdateCommon_InitialState(t *testing.T) {
 			},
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{

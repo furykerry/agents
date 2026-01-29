@@ -38,7 +38,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -74,7 +74,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -122,7 +122,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						TemplateRef: &v1alpha1.SandboxTemplateRef{
 							Name: "test-sbs",
 						},
@@ -141,7 +141,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -173,7 +173,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: -1, // Negative replicas are invalid
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -200,7 +200,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -224,7 +224,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -238,6 +238,33 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 			expectAllow:  false,
 			expectError:  true,
 			errorMessage: "label cannot start with " + v1alpha1.E2BPrefix,
+		},
+		{
+			name: "SandboxSet with both templateRef and podTemplate",
+			sandboxSet: &v1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sbs",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.SandboxSetSpec{
+					Replicas: 3,
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+						TemplateRef: &v1alpha1.SandboxTemplateRef {
+							Name: "test-template",
+						},
+						Template: &corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									v1alpha1.E2BPrefix + "test": "value", // Template internal prefix labels are invalid
+								},
+							},
+						},
+					},
+				},
+			},
+			expectAllow:  false,
+			expectError:  true,
+			errorMessage: "templateRef and podtemplate is mutual exclusive",
 		},
 	}
 

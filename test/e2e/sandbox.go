@@ -53,7 +53,7 @@ var _ = Describe("Sandbox", func() {
 				Namespace: namespace,
 			},
 			Spec: agentsv1alpha1.SandboxSpec{
-				SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
@@ -288,7 +288,7 @@ var _ = Describe("Sandbox", func() {
 					Namespace: Namespace,
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{

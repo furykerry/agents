@@ -56,10 +56,10 @@ type SandboxSpec struct {
 	// +kubebuilder:validation:Format="date-time"
 	PauseTime *metav1.Time `json:"pauseTime,omitempty"`
 
-	SandboxTemplate `json:",inline"`
+	EmbeddedSandboxTemplate `json:",inline"`
 }
 
-type SandboxTemplate struct {
+type EmbeddedSandboxTemplate struct {
 
 	// TemplateRef references a SandboxTemplate, which will be used to create the sandbox.
 	// +optional

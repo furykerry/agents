@@ -22,3 +22,5 @@ type SandboxExpansion interface{}
 type SandboxClaimExpansion interface{}
 
 type SandboxSetExpansion interface{}
+
+type SandboxTemplateExpansion interface{}

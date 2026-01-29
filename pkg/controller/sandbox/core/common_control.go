@@ -238,15 +238,26 @@ func (r *commonControl) EnsureSandboxTerminated(ctx context.Context, args Ensure
 func (r *commonControl) createPod(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) (*corev1.Pod, error) {
 	logger := logf.FromContext(ctx).WithValues("sandbox", klog.KObj(box))
 
+	podTemplate := box.Spec.Template
+	if box.Spec.TemplateRef != nil {
+		refTemplate := &agentsv1alpha1.SandboxTemplate{}
+		err := r.Get(ctx, client.ObjectKey{Namespace: box.Namespace, Name: box.Spec.TemplateRef.Name}, refTemplate)
+		if err != nil {
+			logger.Error(err, "failed to get sandbox template", "template", box.Spec.TemplateRef.Name, "sandbox", box.Name)
+			return nil, err
+		}
+		podTemplate = refTemplate.Spec.Template
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       box.Namespace,
 			Name:            box.Name,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(box, sandboxControllerKind)},
-			Labels:          box.Spec.Template.Labels,
-			Annotations:     box.Spec.Template.Annotations,
+			Labels:          podTemplate.Labels,
+			Annotations:     podTemplate.Annotations,
 		},
-		Spec: box.Spec.Template.Spec,
+		Spec: podTemplate.Spec,
 	}
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}

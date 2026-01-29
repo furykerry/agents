@@ -184,7 +184,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 							},
 						},
 						Spec: agentsv1alpha1.SandboxSpec{
-							SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+							EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 								Template: &corev1.PodTemplateSpec{
 									Spec: corev1.PodSpec{
 										Containers: []corev1.Container{

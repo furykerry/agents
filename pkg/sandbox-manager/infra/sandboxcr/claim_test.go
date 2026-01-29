@@ -237,7 +237,7 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 						OwnerReferences: GetSbsOwnerReference(),
 					},
 					Spec: v1alpha1.SandboxSpec{
-						SandboxTemplate: v1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
@@ -405,7 +405,7 @@ func TestClaimSandboxFailed(t *testing.T) {
 					OwnerReferences: GetSbsOwnerReference(),
 				},
 				Spec: v1alpha1.SandboxSpec{
-					SandboxTemplate: v1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{

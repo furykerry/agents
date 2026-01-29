@@ -85,7 +85,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 5,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -299,7 +299,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 2,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -425,7 +425,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 2,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -556,7 +556,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -632,7 +632,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -735,7 +735,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
 								Labels: map[string]string{
@@ -919,7 +919,7 @@ var _ = Describe("SandboxClaim", func() {
 				},
 				Spec: agentsv1alpha1.SandboxSetSpec{
 					Replicas: 10,
-					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -1186,7 +1186,7 @@ var _ = Describe("SandboxClaim", func() {
 					},
 					Spec: agentsv1alpha1.SandboxSetSpec{
 						Replicas: 5,
-						SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{

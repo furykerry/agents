@@ -56,7 +56,7 @@ type SandboxSetSpec struct {
 	// PersistentContents indicates resume pod with persistent content, Enum: ip, memory, filesystem
 	PersistentContents []string `json:"persistentContents,omitempty"`
 
-	SandboxTemplate `json:",inline"`
+	EmbeddedSandboxTemplate `json:",inline"`
 }
 
 // SandboxSetStatus defines the observed state of SandboxSet.

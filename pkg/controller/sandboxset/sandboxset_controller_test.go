@@ -48,7 +48,7 @@ func getSandboxSet(replicas int32) *v1alpha1.SandboxSet {
 		},
 		Spec: v1alpha1.SandboxSetSpec{
 			Replicas: replicas,
-			SandboxTemplate: v1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels: map[string]string{

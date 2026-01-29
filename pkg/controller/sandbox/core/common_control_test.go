@@ -53,7 +53,7 @@ func TestCommonControl_EnsureSandboxRunning(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: agentsv1alpha1.SandboxSpec{
-						SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
@@ -213,7 +213,7 @@ func TestCommonControl_EnsureSandboxUpdated(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: agentsv1alpha1.SandboxSpec{
-						SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									NodeName: "node-1",
@@ -279,7 +279,7 @@ func TestCommonControl_EnsureSandboxUpdated(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: agentsv1alpha1.SandboxSpec{
-						SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									NodeName: "node-1",
@@ -502,7 +502,7 @@ func TestCommonControl_EnsureSandboxResumed(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: agentsv1alpha1.SandboxSpec{
-						SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 							Template: &corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
@@ -843,7 +843,7 @@ func TestCommonControl_createPod(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels:      map[string]string{"app": "test"},
@@ -890,7 +890,7 @@ func TestCommonControl_createPod(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels:      map[string]string{"app": "test"},
@@ -990,7 +990,7 @@ func TestCommonControl_handleInplaceUpdateSandbox(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
@@ -1037,7 +1037,7 @@ func TestCommonControl_handleInplaceUpdateSandbox(t *testing.T) {
 			},
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
@@ -1084,7 +1084,7 @@ func TestCommonControl_handleInplaceUpdateSandbox(t *testing.T) {
 			},
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{

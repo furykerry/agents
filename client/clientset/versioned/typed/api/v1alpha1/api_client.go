@@ -30,6 +30,7 @@ type ApiV1alpha1Interface interface {
 	SandboxesGetter
 	SandboxClaimsGetter
 	SandboxSetsGetter
+	SandboxTemplatesGetter
 }
 
 // ApiV1alpha1Client is used to interact with features provided by the api group.
@@ -47,6 +48,10 @@ func (c *ApiV1alpha1Client) SandboxClaims(namespace string) SandboxClaimInterfac
 
 func (c *ApiV1alpha1Client) SandboxSets(namespace string) SandboxSetInterface {
 	return newSandboxSets(c, namespace)
+}
+
+func (c *ApiV1alpha1Client) SandboxTemplates(namespace string) SandboxTemplateInterface {
+	return newSandboxTemplates(c, namespace)
 }
 
 // NewForConfig creates a new ApiV1alpha1Client for the given config.

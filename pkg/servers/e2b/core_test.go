@@ -147,7 +147,7 @@ func CreateSandboxPool(t *testing.T, client versioned.Interface, name string, av
 				UID:             types.UID(uuid.NewString()),
 			},
 			Spec: agentsv1alpha1.SandboxSpec{
-				SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
