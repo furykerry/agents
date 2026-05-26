@@ -25,12 +25,20 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+)
+
+// Sentinel string values accepted by the
+// agents.kruise.io/reserve-failed-sandbox-for extension.
+const (
+	ReserveFailedSandboxValueNever   = "never"
+	ReserveFailedSandboxValueForever = "forever"
 )
 
 //goland:noinspection GoSnakeCaseUsage
@@ -47,6 +55,7 @@ const (
 	ExtensionKeyClaimWithCSIMount_MountConfig = ExtensionKeyClaimWithCSIMount + "-volume-config"
 	ExtensionKeySkipInitRuntime               = v1alpha1.E2BPrefix + "skip-init-runtime"
 	ExtensionKeyReserveFailedSandbox          = v1alpha1.E2BPrefix + "reserve-failed-sandbox"
+	ExtensionKeyReserveFailedSandboxFor       = v1alpha1.E2BPrefix + "reserve-failed-sandbox-for"
 	ExtensionKeyCreateOnNoStock               = v1alpha1.E2BPrefix + "create-on-no-stock"
 	ExtensionKeyNeverTimeout                  = v1alpha1.E2BPrefix + "never-timeout"
 )
@@ -82,14 +91,21 @@ func (r *NewSandboxRequest) ParseExtensions() error {
 
 func (r *NewSandboxRequest) parseCommonExtensions() error {
 	r.Extensions.SkipInitRuntime = r.Metadata[ExtensionKeySkipInitRuntime] == v1alpha1.True
-	r.Extensions.ReserveFailedSandbox = r.Metadata[ExtensionKeyReserveFailedSandbox] == v1alpha1.True
+	reserveFor, reserveForSet, err := r.parseAndRemoveReserveFailedSandboxFor()
+	if err != nil {
+		return err
+	}
+	if reserveForSet {
+		r.Extensions.ReserveFailedSandboxFor = reserveFor
+	} else if r.Metadata[ExtensionKeyReserveFailedSandbox] == v1alpha1.True {
+		r.Extensions.ReserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
+	}
 	r.Extensions.CreateOnNoStock = r.Metadata[ExtensionKeyCreateOnNoStock] != v1alpha1.False
 	r.Extensions.NeverTimeout = r.Metadata[ExtensionKeyNeverTimeout] == v1alpha1.True
 	delete(r.Metadata, ExtensionKeySkipInitRuntime)
 	delete(r.Metadata, ExtensionKeyReserveFailedSandbox)
 	delete(r.Metadata, ExtensionKeyCreateOnNoStock)
 	delete(r.Metadata, ExtensionKeyNeverTimeout)
-	var err error
 	if r.Extensions.TimeoutSeconds, err = r.parseAndRemoveIntExtension(ExtensionKeyClaimTimeout); err != nil {
 		return err
 	}
@@ -258,6 +274,30 @@ func (r *NewSandboxRequest) parseAndRemoveIntExtension(key string) (int, error) 
 		}
 	}
 	return 0, nil
+}
+
+func (r *NewSandboxRequest) parseAndRemoveReserveFailedSandboxFor() (*time.Duration, bool, error) {
+	raw, ok := r.Metadata[ExtensionKeyReserveFailedSandboxFor]
+	if !ok {
+		return nil, false, nil
+	}
+	defer delete(r.Metadata, ExtensionKeyReserveFailedSandboxFor)
+
+	switch raw {
+	case ReserveFailedSandboxValueNever:
+		return ptr.To(consts.ReserveFailedSandboxNever), true, nil
+	case ReserveFailedSandboxValueForever:
+		return ptr.To(consts.ReserveFailedSandboxForever), true, nil
+	}
+
+	duration, err := time.ParseDuration(raw)
+	if err != nil {
+		return nil, true, fmt.Errorf("invalid reserve failed sandbox duration %q: %w", raw, err)
+	}
+	if duration < 0 {
+		return nil, true, fmt.Errorf("reserve failed sandbox duration %q cannot be negative, use %q", raw, ReserveFailedSandboxValueForever)
+	}
+	return &duration, true, nil
 }
 
 func (r *NewSandboxRequest) parseAndRemoveQuantity(key string) (resource.Quantity, bool, error) {

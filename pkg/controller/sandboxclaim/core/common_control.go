@@ -23,9 +23,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"golang.org/x/time/rate"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -256,6 +258,11 @@ func (c *commonControl) claimSandboxes(ctx context.Context, claim *agentsv1alpha
 // buildClaimOptions constructs ClaimSandboxOptions for TryClaimSandbox
 func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1alpha1.SandboxClaim, sandboxSet *agentsv1alpha1.SandboxSet) (infra.ClaimSandboxOptions, error) {
 	logger := logf.FromContext(ctx).WithValues("SandboxClaim", klog.KObj(claim))
+	var reserveFailedSandboxFor *time.Duration
+	if claim.Spec.ReserveFailedSandbox {
+		reserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
+	}
+
 	opts := infra.ClaimSandboxOptions{
 		User:     string(claim.UID), // Use UID to ensure uniqueness across claim recreations
 		Template: sandboxSet.Name,
@@ -302,8 +309,8 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 				})
 			}
 		},
-		ReserveFailedSandbox: claim.Spec.ReserveFailedSandbox,
-		CreateOnNoStock:      claim.Spec.CreateOnNoStock,
+		ReserveFailedSandboxFor: reserveFailedSandboxFor,
+		CreateOnNoStock:         claim.Spec.CreateOnNoStock,
 	}
 
 	if claim.Spec.InplaceUpdate != nil {
@@ -384,7 +391,6 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 		opts.RuntimeConfig = claim.Spec.Runtimes
 	}
 
-	// Validate and initialize
 	return sandboxcr.ValidateAndInitClaimOptions(opts)
 }
 

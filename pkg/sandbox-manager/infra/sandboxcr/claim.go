@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/api/v1alpha1"
@@ -53,6 +54,7 @@ import (
 	sandboxManagerUtils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/expectationutils"
 	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 var DefaultCleanupTimeout = 30 * time.Second
@@ -97,6 +99,9 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 	}
 	if opts.WaitReadyTimeout <= 0 {
 		opts.WaitReadyTimeout = consts.DefaultWaitReadyTimeout
+	}
+	if opts.ReserveFailedSandboxFor == nil {
+		opts.ReserveFailedSandboxFor = ptr.To(DefaultReserveFailedSandboxFor)
 	}
 	return opts, nil
 }
@@ -145,7 +150,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		}
 		metrics.LastError = err
 		log.Info("try claim sandbox result", "metrics", metrics.String())
-		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandbox)
+		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor)
 	}()
 	// Step 1: Pick an available sandbox
 	var sbx *Sandbox
@@ -279,23 +284,38 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	return
 }
 
-func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserve bool) {
+// clearFailedSandbox cleans up (or reserves) a failed sandbox according to
+// reserveFor. A nil reserveFor falls back to DefaultReserveFailedSandboxFor.
+func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserveFor *time.Duration) {
 	if err == nil || sbx == nil {
-		return // success or no need to clear
+		return
 	}
+	effective := ptr.Deref(reserveFor, DefaultReserveFailedSandboxFor)
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
-	if reserve {
-		log.Info("the locked sandbox is reserved for debugging")
-	} else {
-		log.Info("the locked sandbox will be deleted", "reason", err)
-		// Use a new context with timeout to avoid indefinite blocking
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), DefaultCleanupTimeout)
-		defer cancel()
-		if err := sbx.Kill(cleanupCtx); err != nil {
-			log.Error(err, "failed to delete locked sandbox")
-		} else {
-			log.Info("sandbox deleted")
+	if effective < 0 {
+		log.Info("the failed sandbox is reserved forever for debugging", "reason", err)
+		return
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), DefaultCleanupTimeout)
+	defer cancel()
+
+	if effective > 0 {
+		shutdownTime := time.Now().Add(effective)
+		log.Info("the failed sandbox will be reserved before delayed deletion", "reason", err, "shutdownTime", shutdownTime)
+		if _, updateErr := sbx.SaveTimeoutWithPolicy(cleanupCtx, timeoututils.Options{
+			ShutdownTime: shutdownTime,
+		}, timeoututils.UpdatePolicyAlways); updateErr != nil {
+			log.Error(updateErr, "failed to set delayed deletion time for failed sandbox")
 		}
+		return
+	}
+
+	log.Info("the failed sandbox will be deleted", "reason", err)
+	if killErr := sbx.Kill(cleanupCtx); killErr != nil {
+		log.Error(killErr, "failed to delete failed sandbox")
+	} else {
+		log.Info("sandbox deleted")
 	}
 }
 

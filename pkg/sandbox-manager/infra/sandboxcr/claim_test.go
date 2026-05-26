@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -89,6 +91,66 @@ func GetMetricsFromSandbox(t *testing.T, sbx infra.Sandbox) infra.ClaimMetrics {
 	metrics := infra.ClaimMetrics{}
 	require.NoError(t, json.Unmarshal([]byte(ms), &metrics))
 	return metrics
+}
+
+func TestValidateAndInitClaimOptions_ReserveFailedSandboxFor(t *testing.T) {
+	tests := []struct {
+		name        string
+		opts        infra.ClaimSandboxOptions
+		expectFor   time.Duration
+		expectInput bool // expects the returned pointer to be the same instance as input
+	}{
+		{
+			name: "unset defaults to DefaultReserveFailedSandboxFor",
+			opts: infra.ClaimSandboxOptions{
+				User:     "test-user",
+				Template: "test-template",
+			},
+			expectFor: DefaultReserveFailedSandboxFor,
+		},
+		{
+			name: "explicit never deletes immediately",
+			opts: infra.ClaimSandboxOptions{
+				User:                    "test-user",
+				Template:                "test-template",
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
+			},
+			expectFor:   consts.ReserveFailedSandboxNever,
+			expectInput: true,
+		},
+		{
+			name: "explicit finite reserve",
+			opts: infra.ClaimSandboxOptions{
+				User:                    "test-user",
+				Template:                "test-template",
+				ReserveFailedSandboxFor: ptr.To(2 * time.Hour),
+			},
+			expectFor:   2 * time.Hour,
+			expectInput: true,
+		},
+		{
+			name: "explicit forever reserve",
+			opts: infra.ClaimSandboxOptions{
+				User:                    "test-user",
+				Template:                "test-template",
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
+			},
+			expectFor:   consts.ReserveFailedSandboxForever,
+			expectInput: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ValidateAndInitClaimOptions(tt.opts)
+			require.NoError(t, err)
+			require.NotNil(t, got.ReserveFailedSandboxFor)
+			assert.Equal(t, tt.expectFor, *got.ReserveFailedSandboxFor)
+			if tt.expectInput {
+				assert.Same(t, tt.opts.ReserveFailedSandboxFor, got.ReserveFailedSandboxFor)
+			}
+		})
+	}
 }
 
 //goland:noinspection GoDeprecation
@@ -516,18 +578,20 @@ func TestClaimSandboxFailed(t *testing.T) {
 
 	// Test cases
 	tests := []struct {
-		name        string
-		options     infra.ClaimSandboxOptions
-		preModifier func(sbx *v1alpha1.Sandbox)
-		expectError string
-		getContext  func() context.Context
+		name           string
+		options        infra.ClaimSandboxOptions
+		preModifier    func(sbx *v1alpha1.Sandbox)
+		expectError    string
+		expectDeleted  bool
+		expectShutdown bool
+		getContext     func() context.Context
 	}{
 		{
 			name: "start container failed, reserved",
 			options: infra.ClaimSandboxOptions{
-				User:                 "test-user",
-				Template:             existTemplate,
-				ReserveFailedSandbox: true,
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
 				InplaceUpdate: &config.InplaceUpdateOptions{
 					Image: "new-image",
 				},
@@ -542,13 +606,35 @@ func TestClaimSandboxFailed(t *testing.T) {
 				}
 			},
 			expectError: "sandbox start container failed",
+		},
+		{
+			name: "start container failed, reserved for duration",
+			options: infra.ClaimSandboxOptions{
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(time.Hour),
+				InplaceUpdate: &config.InplaceUpdateOptions{
+					Image: "new-image",
+				},
+			},
+			preModifier: func(sbx *v1alpha1.Sandbox) {
+				sbx.Status.Conditions = []metav1.Condition{
+					{
+						Type:   string(v1alpha1.SandboxConditionReady),
+						Status: metav1.ConditionTrue,
+						Reason: v1alpha1.SandboxReadyReasonStartContainerFailed,
+					},
+				}
+			},
+			expectError:    "sandbox start container failed",
+			expectShutdown: true,
 		},
 		{
 			name: "start container failed, not reserved",
 			options: infra.ClaimSandboxOptions{
-				User:                 "test-user",
-				Template:             existTemplate,
-				ReserveFailedSandbox: false,
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
 				InplaceUpdate: &config.InplaceUpdateOptions{
 					Image: "new-image",
 				},
@@ -562,15 +648,16 @@ func TestClaimSandboxFailed(t *testing.T) {
 					},
 				}
 			},
-			expectError: "sandbox start container failed",
+			expectError:   "sandbox start container failed",
+			expectDeleted: true,
 		},
 		{
 			name: "csi mount failed, reserved",
 			options: infra.ClaimSandboxOptions{
-				User:                 "test-user",
-				Template:             existTemplate,
-				ReserveFailedSandbox: true,
-				InitRuntime:          &config.InitRuntimeOptions{},
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
+				InitRuntime:             &config.InitRuntimeOptions{},
 				CSIMount: &config.CSIMountOptions{
 					MountOptionList: []config.MountConfig{
 						{
@@ -588,10 +675,10 @@ func TestClaimSandboxFailed(t *testing.T) {
 		{
 			name: "csi mount failed, not reserved",
 			options: infra.ClaimSandboxOptions{
-				User:                 "test-user",
-				Template:             existTemplate,
-				ReserveFailedSandbox: false,
-				InitRuntime:          &config.InitRuntimeOptions{},
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
+				InitRuntime:             &config.InitRuntimeOptions{},
 				CSIMount: &config.CSIMountOptions{
 					MountOptionList: []config.MountConfig{
 						{
@@ -604,15 +691,14 @@ func TestClaimSandboxFailed(t *testing.T) {
 				sbx.Annotations[v1alpha1.AnnotationRuntimeURL] = server.URL
 				sbx.Annotations[v1alpha1.AnnotationRuntimeAccessToken] = runtime.AccessToken
 			},
-			expectError: "command failed",
+			expectError:   "command failed",
+			expectDeleted: true,
 		},
 		{
 			name: "context canceled",
 			options: infra.ClaimSandboxOptions{
 				User:     "test-user",
 				Template: existTemplate,
-				// hack: the sandbox is not locked in this case, set true to pass the assertion
-				ReserveFailedSandbox: true,
 			},
 			getContext: func() context.Context {
 				ctx, cancel := context.WithCancel(t.Context())
@@ -626,8 +712,6 @@ func TestClaimSandboxFailed(t *testing.T) {
 			options: infra.ClaimSandboxOptions{
 				User:     "test-user",
 				Template: existTemplate,
-				// hack: the sandbox is not locked in this case, set true to pass the assertion
-				ReserveFailedSandbox: true,
 			},
 			preModifier: func(sbx *v1alpha1.Sandbox) {
 				sbx.Status.PodInfo.PodIP = ""
@@ -700,11 +784,18 @@ func TestClaimSandboxFailed(t *testing.T) {
 			_, _, err = TryClaimSandbox(ctx, opts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, testInfra.createLimiter)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectError)
-			err = fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: name}, &v1alpha1.Sandbox{})
-			if tt.options.ReserveFailedSandbox {
-				assert.NoError(t, err)
-			} else {
+			got := &v1alpha1.Sandbox{}
+			err = fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: name}, got)
+			if tt.expectDeleted {
 				assert.True(t, apierrors.IsNotFound(err))
+				return
+			}
+			require.NoError(t, err)
+			if tt.expectShutdown {
+				require.NotNil(t, got.Spec.ShutdownTime)
+				assert.WithinDuration(t, time.Now().Add(time.Hour), got.Spec.ShutdownTime.Time, 5*time.Second)
+			} else {
+				assert.Nil(t, got.Spec.ShutdownTime)
 			}
 		})
 	}
