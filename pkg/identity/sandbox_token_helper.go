@@ -30,7 +30,7 @@ import (
 // IssueSandboxToken issues a security token for the given sandbox using the
 // registered identity provider.
 //
-// It collects all sandbox labels prefixed with utils.SecurityMetadataPrefix as
+// It collects all sandbox labels prefixed with identity.SecurityMetadataPrefix as
 // request metadata, builds a TokenRequest of type TokenTypeAgent, and delegates
 // to the package-level IssueToken entry. The returned cost reflects the total
 // duration spent issuing the token (including metadata collection), which

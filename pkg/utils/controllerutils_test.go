@@ -19,6 +19,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -243,4 +244,157 @@ func TestGetClusterIDHash(t *testing.T) {
 
 		assert.NotEqual(t, hashA, hashB, "different inputs should produce different hashes")
 	})
+}
+
+func TestDoItSlowly(t *testing.T) {
+	tests := []struct {
+		name             string
+		count            int
+		initialBatchSize int
+		failAtCall       int    // -1 means no failure
+		wantSuccesses    int
+		expectError      string
+	}{
+		{
+			name:             "all succeed with count 1",
+			count:            1,
+			initialBatchSize: 1,
+			failAtCall:       -1,
+			wantSuccesses:    1,
+		},
+		{
+			name:             "all succeed with count 5",
+			count:            5,
+			initialBatchSize: 1,
+			failAtCall:       -1,
+			wantSuccesses:    5,
+		},
+		{
+			name:             "all succeed with larger batch size",
+			count:            10,
+			initialBatchSize: 5,
+			failAtCall:       -1,
+			wantSuccesses:    10,
+		},
+		{
+			name:             "zero count",
+			count:            0,
+			initialBatchSize: 1,
+			failAtCall:       -1,
+			wantSuccesses:    0,
+		},
+		{
+			name:             "failure in first batch",
+			count:            5,
+			initialBatchSize: 5,
+			failAtCall:       3, // calls 1-2 succeed, calls 3-5 fail
+			wantSuccesses:    2,
+			expectError:      "intentional failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callCount := 0
+			var mu sync.Mutex
+
+			fn := func() error {
+				mu.Lock()
+				callCount++
+				currentCall := callCount
+				mu.Unlock()
+
+				if tt.failAtCall > 0 && currentCall >= tt.failAtCall {
+					return fmt.Errorf("intentional failure at call %d", currentCall)
+				}
+				return nil
+			}
+
+			successes, err := DoItSlowly(tt.count, tt.initialBatchSize, fn)
+			if tt.expectError != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantSuccesses, successes)
+		})
+	}
+}
+
+func TestDoItSlowlyWithInputs(t *testing.T) {
+	tests := []struct {
+		name             string
+		inputs           []int
+		initialBatchSize int
+		failOnInput      int // -1 means no failure
+		wantSuccesses    int
+		expectError      string
+	}{
+		{
+			name:             "all succeed empty inputs",
+			inputs:           []int{},
+			initialBatchSize: 1,
+			failOnInput:      -1,
+			wantSuccesses:    0,
+		},
+		{
+			name:             "all succeed single input",
+			inputs:           []int{1},
+			initialBatchSize: 1,
+			failOnInput:      -1,
+			wantSuccesses:    1,
+		},
+		{
+			name:             "all succeed multiple inputs",
+			inputs:           []int{1, 2, 3, 4, 5},
+			initialBatchSize: 2,
+			failOnInput:      -1,
+			wantSuccesses:    5,
+		},
+		{
+			name:             "process string inputs",
+			inputs:           []int{10, 20, 30},
+			initialBatchSize: 1,
+			failOnInput:      -1,
+			wantSuccesses:    3,
+		},
+		{
+			name:             "failure on specific input",
+			inputs:           []int{1, 2, 3},
+			initialBatchSize: 1,
+			failOnInput:      1, // first input fails, batch stops immediately
+			wantSuccesses:    0,
+			expectError:      "intentional failure on input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processedInputs := make([]int, 0)
+			var mu sync.Mutex
+
+			fn := func(input int) error {
+				mu.Lock()
+				processedInputs = append(processedInputs, input)
+				mu.Unlock()
+
+				if tt.failOnInput > 0 && input == tt.failOnInput {
+					return fmt.Errorf("intentional failure on input %d", input)
+				}
+				return nil
+			}
+
+			successes, err := DoItSlowlyWithInputs(tt.inputs, tt.initialBatchSize, fn)
+			if tt.expectError != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+				// Verify all inputs were processed when no error
+				assert.Equal(t, len(tt.inputs), len(processedInputs))
+			}
+			assert.Equal(t, tt.wantSuccesses, successes)
+		})
+	}
 }

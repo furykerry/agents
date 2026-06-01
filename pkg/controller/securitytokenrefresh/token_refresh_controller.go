@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package securitytokenrefresh implements a controller-runtime reconciler that
 // refreshes the security token of claimed sandboxes shortly before the token
-// stored in the sandbox annotation utils.AgentKeyTokenRefreshStatus expires.
+// stored in the sandbox annotation identity.AgentKeyTokenRefreshStatus expires.
 //
 // The controller is meant to run inside the agent-sandbox-controller binary,
 // alongside the existing Sandbox / SandboxClaim / Checkpoint controllers. It is
@@ -199,7 +199,7 @@ type SecurityTokenRefreshReconciler struct {
 //
 // The flow is intentionally side-effect-light: every decision (refresh vs.
 // requeue) is derived from the AccessTokenExpiration recorded in the
-// utils.AgentKeyTokenRefreshStatus annotation. The actual issue/propagate/patch
+// identity.AgentKeyTokenRefreshStatus annotation. The actual issue/propagate/patch
 // chain lives in core.Refresher to keep this method focused on policy.
 func (r *SecurityTokenRefreshReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Fetch the sandbox instance

@@ -47,11 +47,6 @@ const (
 	// default sandbox deploy namespace
 	DefaultSandboxDeployNamespace = "sandbox-system"
 
-	// AnnotationKeyClaimWithCSIMount_MountConfig is the annotation key for CSI mount configuration.
-	// Previously defined in pkg/servers/e2b/models; moved here to break the
-	// pkg/utils → pkg/servers layer violation.
-	AnnotationKeyClaimWithCSIMount_MountConfig = "e2b.agents.kruise.io/csi-volume-config"
-
 	// MaxConditionMessageLen was moved to a var block below for env-based configuration.
 )
 

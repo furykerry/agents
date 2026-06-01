@@ -136,7 +136,7 @@ func TestIssueSandboxToken_NoLabels(t *testing.T) {
 }
 
 // TestIssueSandboxToken_OnlyNonSecurityLabels verifies the prefix filter rejects
-// every label that is not under utils.SecurityMetadataPrefix, even when label
+// every label that is not under identity.SecurityMetadataPrefix, even when label
 // values look plausible (e.g. share a substring with the prefix).
 func TestIssueSandboxToken_OnlyNonSecurityLabels(t *testing.T) {
 	fake := &fakeIdentityProvider{resp: &TokenResponse{AccessToken: "tok"}}

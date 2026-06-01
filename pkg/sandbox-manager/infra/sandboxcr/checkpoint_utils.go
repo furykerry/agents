@@ -18,13 +18,12 @@ package sandboxcr
 
 import (
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 // necessaryAnnotationKeys defines the list of annotation keys that need to be
 // preserved when converting between Sandbox and SandboxTemplate.
 var necessaryAnnotationKeys = []string{
-	utils.AnnotationKeyClaimWithCSIMount_MountConfig,
+	v1alpha1.AnnotationCSIVolumeConfig,
 }
 
 func PropagateAnnotationsToCheckpoint(sbx *v1alpha1.Sandbox, cp *v1alpha1.Checkpoint) {

@@ -427,7 +427,7 @@ func InitRuntime(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.I
 
 func GetCsiMountExtensionRequest(s metav1.Object) ([]v1alpha1.CSIMountConfig, error) {
 	var csiMountRequests []v1alpha1.CSIMountConfig
-	csiMountRequestsRaw := s.GetAnnotations()[utils.AnnotationKeyClaimWithCSIMount_MountConfig]
+	csiMountRequestsRaw := s.GetAnnotations()[agentsv1alpha1.AnnotationCSIVolumeConfig]
 	if csiMountRequestsRaw == "" {
 		return nil, nil
 	}
@@ -442,7 +442,7 @@ func GetCsiMountExtensionRequest(s metav1.Object) ([]v1alpha1.CSIMountConfig, er
 // Lookup order:
 //  1. AnnotationRuntimeURL on the Sandbox object.
 //  2. AnnotationEnvdURL on the Sandbox object (legacy key, kept for backwards compatibility).
-//  3. Pod IP from the cached route plus the well-known consts.RuntimePort, used as a fallback
+//  3. Pod IP from the cached route plus the well-known utils.RuntimePort, used as a fallback
 //     while the controller has not yet stamped the URL annotation.
 //
 // Returns an empty string when none of the sources is usable (e.g. the pod has not been scheduled

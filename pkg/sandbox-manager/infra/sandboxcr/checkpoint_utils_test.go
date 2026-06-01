@@ -23,11 +23,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 func TestPropagateAnnotationsToCheckpoint(t *testing.T) {
-	csiKey := utils.AnnotationKeyClaimWithCSIMount_MountConfig
+	csiKey := v1alpha1.AnnotationCSIVolumeConfig
 
 	tests := []struct {
 		name               string
@@ -156,7 +155,7 @@ func TestPropagateAnnotationsToCheckpoint(t *testing.T) {
 }
 
 func TestRestoreAnnotationsFromCheckpoint(t *testing.T) {
-	csiKey := utils.AnnotationKeyClaimWithCSIMount_MountConfig
+	csiKey := v1alpha1.AnnotationCSIVolumeConfig
 
 	tests := []struct {
 		name               string
