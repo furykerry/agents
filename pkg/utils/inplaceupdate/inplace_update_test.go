@@ -2884,9 +2884,9 @@ func TestResourcesEqual(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resourcesEqual(tt.desired, tt.actual)
+			got := ResourcesEqual(tt.desired, tt.actual)
 			if got != tt.expect {
-				t.Errorf("resourcesEqual() = %v, want %v", got, tt.expect)
+				t.Errorf("ResourcesEqual() = %v, want %v", got, tt.expect)
 			}
 		})
 	}

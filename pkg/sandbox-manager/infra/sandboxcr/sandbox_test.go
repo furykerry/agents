@@ -1199,3 +1199,87 @@ func TestSandbox_CSIMount(t *testing.T) {
 		})
 	}
 }
+
+func TestMergePodLabels(t *testing.T) {
+	tests := []struct {
+		name           string
+		existingLabels map[string]string
+		inputLabels    map[string]string
+		wantLabels     map[string]string
+	}{
+		{
+			name:           "nil existing labels - initializes and sets all",
+			existingLabels: nil,
+			inputLabels:    map[string]string{"app": "sandbox", "env": "prod"},
+			wantLabels:     map[string]string{"app": "sandbox", "env": "prod"},
+		},
+		{
+			name:           "empty existing labels - initializes and sets all",
+			existingLabels: map[string]string{},
+			inputLabels:    map[string]string{"app": "sandbox"},
+			wantLabels:     map[string]string{"app": "sandbox"},
+		},
+		{
+			name:           "empty input labels - no change",
+			existingLabels: map[string]string{"app": "sandbox"},
+			inputLabels:    map[string]string{},
+			wantLabels:     map[string]string{"app": "sandbox"},
+		},
+		{
+			name:           "nil input labels - no change",
+			existingLabels: map[string]string{"app": "sandbox"},
+			inputLabels:    nil,
+			wantLabels:     map[string]string{"app": "sandbox"},
+		},
+		{
+			name:           "overwrite existing label with same key",
+			existingLabels: map[string]string{"app": "old", "env": "dev"},
+			inputLabels:    map[string]string{"app": "new"},
+			wantLabels:     map[string]string{"app": "new", "env": "dev"},
+		},
+		{
+			name:           "add new labels to existing",
+			existingLabels: map[string]string{"app": "sandbox"},
+			inputLabels:    map[string]string{"env": "prod", "tier": "frontend"},
+			wantLabels:     map[string]string{"app": "sandbox", "env": "prod", "tier": "frontend"},
+		},
+		{
+			name:           "both nil - no change",
+			existingLabels: nil,
+			inputLabels:    nil,
+			wantLabels:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := &Sandbox{
+				Sandbox: &v1alpha1.Sandbox{
+					Spec: v1alpha1.SandboxSpec{
+						EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+							Template: &corev1.PodTemplateSpec{
+								ObjectMeta: metav1.ObjectMeta{
+									Labels: tt.existingLabels,
+								},
+								Spec: corev1.PodSpec{
+									Containers: []corev1.Container{{Name: "main", Image: "nginx:latest"}},
+								},
+							},
+						},
+					},
+				},
+			}
+			infra.MergePodLabels(sbx, tt.inputLabels)
+			got := sbx.GetPodLabels()
+			if len(got) != len(tt.wantLabels) {
+				t.Errorf("MergePodLabels() labels count = %d, want %d, got=%v, want=%v", len(got), len(tt.wantLabels), got, tt.wantLabels)
+				return
+			}
+			for k, wantVal := range tt.wantLabels {
+				if gotVal, ok := got[k]; !ok || gotVal != wantVal {
+					t.Errorf("MergePodLabels() label[%q] = %q, want %q", k, gotVal, wantVal)
+				}
+			}
+		})
+	}
+}

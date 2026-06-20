@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -221,6 +220,11 @@ func handleInPlaceUpdateCommon(
 // the sandbox template is metadata (labels/annotations), with no image or
 // resource changes. When this is the case, the controller can directly patch
 // the pod metadata without going through the full in-place update flow.
+//
+// Resource comparison is subset-based: only the resources declared in the
+// sandbox template are checked against the pod. Extra resources injected into
+// the pod (e.g., by LimitRanger or other admission webhooks) are ignored so
+// that metadata-only changes are not mistakenly treated as in-place updates.
 func isMetadataOnlyChange(pod *corev1.Pod, box *agentsv1alpha1.Sandbox) bool {
 	if box.Spec.Template == nil {
 		return false
@@ -239,7 +243,7 @@ func isMetadataOnlyChange(pod *corev1.Pod, box *agentsv1alpha1.Sandbox) bool {
 		if origin.Image != container.Image {
 			return false
 		}
-		if !reflect.DeepEqual(origin.Resources, container.Resources) {
+		if !inplaceupdate.ResourcesEqual(origin.Resources, container.Resources) {
 			return false
 		}
 	}
