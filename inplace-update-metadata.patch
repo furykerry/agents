@@ -1,0 +1,1130 @@
+diff --git a/pkg/cache/interface.go b/pkg/cache/interface.go
+index ec3f3623..6cd3cd66 100644
+--- a/pkg/cache/interface.go
++++ b/pkg/cache/interface.go
+@@ -74,8 +74,17 @@ type Provider interface {
+ 
+ 	// NewSandboxWaitReadyTask builds an immutable wait task for post-claim
+ 	// readiness (Generation observed + Ready condition not StartContainerFailed
+-	// + not InplaceUpdating + Running + PodIP set).
+-	NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
++	// + Running + PodIP set).
++	//
++	// When requireInplaceUpdateCompletion is true, the task additionally
++	// requires the InplaceUpdate condition to be non-nil and True before
++	// reporting ready. This prevents premature readiness when an in-place
++	// update (image or resources change) has been requested but the
++	// controller has not yet processed it. If the controller reports
++	// the InplaceUpdate condition as Failed, the task returns an error
++	// immediately instead of waiting for timeout. When false, the
++	// InplaceUpdate condition is not checked at all.
++	NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, requireInplaceUpdateCompletion bool) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
+ 
+ 	// NewCheckpointTask builds an immutable wait task for a Checkpoint that
+ 	// succeeds when Status.Phase == CheckpointSucceeded (with non-empty
+diff --git a/pkg/cache/tasks.go b/pkg/cache/tasks.go
+index ca2648f3..bfc141cd 100644
+--- a/pkg/cache/tasks.go
++++ b/pkg/cache/tasks.go
+@@ -98,8 +98,17 @@ func (c *Cache) NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sa
+ 	)
+ }
+ 
+-// NewSandboxWaitReadyTask builds a WaitTask that encapsulates the readiness check
+-func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
++// NewSandboxWaitReadyTask builds a WaitTask that encapsulates the readiness check.
++//
++// When requireInplaceUpdateCompletion is true, the task additionally requires
++// the InplaceUpdate condition to be non-nil and True before reporting ready.
++// This prevents premature readiness when an in-place update (image or resources
++// change) has been requested but the controller has not yet processed it. If the
++// controller reports the InplaceUpdate condition as Failed, the task returns an
++// error immediately instead of waiting for timeout.
++// When requireInplaceUpdateCompletion is false, the InplaceUpdate condition is
++// not checked at all.
++func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, requireInplaceUpdateCompletion bool) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
+ 	check := func(s *agentsv1alpha1.Sandbox) (bool, error) {
+ 		if s.Status.ObservedGeneration != s.Generation {
+ 			return false, nil
+@@ -108,9 +117,21 @@ func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1
+ 		if readyCond != nil && readyCond.Reason == agentsv1alpha1.SandboxReadyReasonStartContainerFailed {
+ 			return false, fmt.Errorf("sandbox start container failed: %s", readyCond.Message)
+ 		}
+-		inplaceCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
+-		if inplaceCond != nil && inplaceCond.Reason == agentsv1alpha1.SandboxInplaceUpdateReasonInplaceUpdating {
+-			return false, nil
++		if requireInplaceUpdateCompletion {
++			// Wait for the controller to set the InplaceUpdate condition and
++			// for it to reach a terminal True state (Succeeded). A nil
++			// condition means the controller has not yet observed the spec
++			// change that triggers the in-place update.
++			inplaceCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
++			if inplaceCond == nil {
++				return false, nil
++			}
++			if inplaceCond.Reason == agentsv1alpha1.SandboxInplaceUpdateReasonFailed {
++				return false, fmt.Errorf("in-place update failed: %s", inplaceCond.Message)
++			}
++			if inplaceCond.Status != metav1.ConditionTrue {
++				return false, nil
++			}
+ 		}
+ 		state, _ := utils.GetSandboxState(s)
+ 		return state == agentsv1alpha1.SandboxStateRunning && s.Status.PodInfo.PodIP != "", nil
+diff --git a/pkg/cache/tasks_test.go b/pkg/cache/tasks_test.go
+index d1097016..adf173ed 100644
+--- a/pkg/cache/tasks_test.go
++++ b/pkg/cache/tasks_test.go
+@@ -118,7 +118,7 @@ func TestNewSandboxWaitReadyTask_BoundAction(t *testing.T) {
+ 	}
+ 	c, _, err := cachetest.NewTestCache(t, sbx)
+ 	require.NoError(t, err)
+-	task := c.NewSandboxWaitReadyTask(context.Background(), sbx)
++	task := c.NewSandboxWaitReadyTask(context.Background(), sbx, false)
+ 	assert.Equal(t, cacheutils.WaitActionWaitReady, task.Action())
+ 	// Ready → satisfied fast path.
+ 	assert.NoError(t, task.Wait(100*time.Millisecond))
+@@ -141,12 +141,92 @@ func TestNewSandboxWaitReadyTask_StartContainerFailed_ReturnsError(t *testing.T)
+ 	}
+ 	c, _, err := cachetest.NewTestCache(t, sbx)
+ 	require.NoError(t, err)
+-	task := c.NewSandboxWaitReadyTask(context.Background(), sbx)
++	task := c.NewSandboxWaitReadyTask(context.Background(), sbx, false)
+ 	err = task.Wait(100 * time.Millisecond)
+ 	assert.Error(t, err)
+ 	assert.Contains(t, err.Error(), "start container failed")
+ }
+ 
++func TestNewSandboxWaitReadyTask_RequireInplaceUpdateCompletion(t *testing.T) {
++	tests := []struct {
++		name        string
++		sbxName     string
++		inplaceCond *metav1.Condition
++		expectError string
++	}{
++		{
++			name:        "inplace update condition nil - waits until timeout",
++			sbxName:     "sbx-inplace-nil",
++			inplaceCond: nil,
++			expectError: "not satisfied",
++		},
++		{
++			name:    "inplace update condition InplaceUpdating - waits until timeout",
++			sbxName: "sbx-inplace-updating",
++			inplaceCond: &metav1.Condition{
++				Type:   string(agentsv1alpha1.SandboxConditionInplaceUpdate),
++				Status: metav1.ConditionFalse,
++				Reason: agentsv1alpha1.SandboxInplaceUpdateReasonInplaceUpdating,
++			},
++			expectError: "not satisfied",
++		},
++		{
++			name:    "inplace update condition Succeeded - ready immediately",
++			sbxName: "sbx-inplace-succeeded",
++			inplaceCond: &metav1.Condition{
++				Type:   string(agentsv1alpha1.SandboxConditionInplaceUpdate),
++				Status: metav1.ConditionTrue,
++				Reason: agentsv1alpha1.SandboxInplaceUpdateReasonSucceeded,
++			},
++			expectError: "",
++		},
++		{
++			name:    "inplace update condition Failed - returns error immediately",
++			sbxName: "sbx-inplace-failed",
++			inplaceCond: &metav1.Condition{
++				Type:    string(agentsv1alpha1.SandboxConditionInplaceUpdate),
++				Status:  metav1.ConditionFalse,
++				Reason:  agentsv1alpha1.SandboxInplaceUpdateReasonFailed,
++				Message: "QoS class changed",
++			},
++			expectError: "in-place update failed",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			sbx := &agentsv1alpha1.Sandbox{
++				ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: tt.sbxName, Generation: 1},
++				Status: agentsv1alpha1.SandboxStatus{
++					ObservedGeneration: 1,
++					Phase:              agentsv1alpha1.SandboxRunning,
++					PodInfo:            agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
++					Conditions: []metav1.Condition{
++						{
++							Type:   string(agentsv1alpha1.SandboxConditionReady),
++							Status: metav1.ConditionTrue,
++							Reason: agentsv1alpha1.SandboxReadyReasonPodReady,
++						},
++					},
++				},
++			}
++			if tt.inplaceCond != nil {
++				sbx.Status.Conditions = append(sbx.Status.Conditions, *tt.inplaceCond)
++			}
++			c, _, err := cachetest.NewTestCache(t, sbx)
++			require.NoError(t, err)
++			task := c.NewSandboxWaitReadyTask(context.Background(), sbx, true)
++			err = task.Wait(200 * time.Millisecond)
++			if tt.expectError != "" {
++				require.Error(t, err)
++				assert.Contains(t, err.Error(), tt.expectError)
++			} else {
++				assert.NoError(t, err)
++			}
++		})
++	}
++}
++
+ func TestNewCheckpointTask_Succeeded(t *testing.T) {
+ 	cp := &agentsv1alpha1.Checkpoint{
+ 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "cp-1"},
+diff --git a/pkg/controller/checkpoint/utils.go b/pkg/controller/checkpoint/utils.go
+index f5fcb030..8aa82273 100644
+--- a/pkg/controller/checkpoint/utils.go
++++ b/pkg/controller/checkpoint/utils.go
+@@ -19,7 +19,6 @@ package checkpoint
+ import (
+ 	"encoding/json"
+ 	"fmt"
+-	"reflect"
+ 
+ 	corev1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -28,6 +27,7 @@ import (
+ 
+ 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+ 	"github.com/openkruise/agents/pkg/utils/configuration"
++	"github.com/openkruise/agents/pkg/utils/inplaceupdate"
+ )
+ 
+ func getTemplateContainers(box *agentsv1alpha1.Sandbox) []corev1.Container {
+@@ -86,7 +86,7 @@ func buildTemplateContainerDelta(pod *corev1.Pod, box *agentsv1alpha1.Sandbox) [
+ 		if !isTemplate {
+ 			continue
+ 		}
+-		if !reflect.DeepEqual(pc.Resources, tc.Resources) {
++		if !inplaceupdate.ResourcesEqual(tc.Resources, pc.Resources) {
+ 			result = append(result, corev1.Container{
+ 				Name:      pc.Name,
+ 				Resources: *pc.Resources.DeepCopy(),
+diff --git a/pkg/controller/sandbox/core/common_inplace_update_handler.go b/pkg/controller/sandbox/core/common_inplace_update_handler.go
+index c3078fd1..7b855c59 100644
+--- a/pkg/controller/sandbox/core/common_inplace_update_handler.go
++++ b/pkg/controller/sandbox/core/common_inplace_update_handler.go
+@@ -128,6 +128,26 @@ func handleInPlaceUpdateCommon(
+ 		return true, nil
+ 	}
+ 
++	// If only metadata (labels/annotations) changed, directly patch the pod metadata
++	// without going through the in-place update flow. This avoids unnecessarily
++	// setting the InplaceUpdate condition and Ready=False, which would block
++	// sandbox readiness for metadata-only changes.
++	if isMetadataOnlyChange(pod, box) {
++		klog.InfoS("metadata-only change detected, patching pod metadata directly", "sandbox", klog.KObj(box))
++		opts := inplaceupdate.InPlaceUpdateOptions{
++			Pod:      pod,
++			Box:      box,
++			Revision: newStatus.UpdateRevision,
++		}
++		control := handler.GetInPlaceUpdateControl()
++		if _, err := control.Update(ctx, opts); err != nil {
++			msg := err.Error()
++			handler.GetRecorder().Eventf(box, corev1.EventTypeWarning, "InplaceUpdateFailed", msg)
++			return false, err
++		}
++		return true, nil
++	}
++
+ 	// Pre-check: reject resize if it would change the pod's QoS class
+ 	origQoS, newQoS, qosChanged := inplaceupdate.CheckResizeQoSChange(box, pod)
+ 	if qosChanged {
+@@ -196,6 +216,40 @@ func handleInPlaceUpdateCommon(
+ 	return false, nil
+ }
+ 
++// isMetadataOnlyChange returns true if the only difference between the pod and
++// the sandbox template is metadata (labels/annotations), with no image or
++// resource changes. When this is the case, the controller can directly patch
++// the pod metadata without going through the full in-place update flow.
++//
++// Resource comparison is subset-based: only the resources declared in the
++// sandbox template are checked against the pod. Extra resources injected into
++// the pod (e.g., by LimitRanger or other admission webhooks) are ignored so
++// that metadata-only changes are not mistakenly treated as in-place updates.
++func isMetadataOnlyChange(pod *corev1.Pod, box *agentsv1alpha1.Sandbox) bool {
++	if box.Spec.Template == nil {
++		return false
++	}
++	originContainers := make(map[string]corev1.Container, len(box.Spec.Template.Spec.Containers))
++	for i := range box.Spec.Template.Spec.Containers {
++		obj := box.Spec.Template.Spec.Containers[i]
++		originContainers[obj.Name] = obj
++	}
++	for i := range pod.Spec.Containers {
++		container := pod.Spec.Containers[i]
++		origin, ok := originContainers[container.Name]
++		if !ok {
++			continue
++		}
++		if origin.Image != container.Image {
++			return false
++		}
++		if !inplaceupdate.ResourcesEqual(origin.Resources, container.Resources) {
++			return false
++		}
++	}
++	return true
++}
++
+ // isInplaceUpdateTerminal returns true if the InplaceUpdate condition has already
+ // reached a terminal state that should not be re-evaluated.
+ func isInplaceUpdateTerminal(newStatus *agentsv1alpha1.SandboxStatus) bool {
+diff --git a/pkg/controller/sandbox/core/common_inplace_update_handler_test.go b/pkg/controller/sandbox/core/common_inplace_update_handler_test.go
+index 0778b554..6b9e452b 100644
+--- a/pkg/controller/sandbox/core/common_inplace_update_handler_test.go
++++ b/pkg/controller/sandbox/core/common_inplace_update_handler_test.go
+@@ -27,6 +27,7 @@ import (
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+ 	"k8s.io/client-go/tools/record"
++	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+ 
+ 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+@@ -1246,6 +1247,282 @@ func TestHandleInPlaceUpdateCommon_NoChangeReturnsTrue(t *testing.T) {
+ 	}
+ }
+ 
++func TestHandleInPlaceUpdateCommon_MetadataOnlyChange(t *testing.T) {
++	// Same image and resources, only labels differ → isMetadataOnlyChange returns true
++	// → controller patches pod metadata directly without setting InplaceUpdate condition
++	ctx := context.Background()
++
++	scheme := runtime.NewScheme()
++	_ = clientgoscheme.AddToScheme(scheme)
++	_ = agentsv1alpha1.AddToScheme(scheme)
++
++	podSpec := corev1.PodSpec{
++		Containers: []corev1.Container{{
++			Name:  "main",
++			Image: "nginx:latest",
++		}},
++	}
++
++	box := buildMatchingHashBox("test-sandbox", "default", podSpec)
++	// Add labels to the sandbox template that the pod does not have.
++	// This is a metadata-only change — hash-immutable-part is unaffected.
++	box.Spec.Template.Labels = map[string]string{
++		"app": "test-app",
++	}
++
++	// Compute the new revision hash (includes labels)
++	hash, _ := HashSandbox(box)
++
++	pod := &corev1.Pod{
++		ObjectMeta: metav1.ObjectMeta{
++			Name:      "test-pod",
++			Namespace: "default",
++			Labels: map[string]string{
++				agentsv1alpha1.PodLabelTemplateHash: "old-revision",
++			},
++		},
++		Spec: podSpec, // Same image and resources as box template
++	}
++
++	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
++
++	newStatus := &agentsv1alpha1.SandboxStatus{
++		UpdateRevision: hash,
++	}
++
++	recorder := createTestRecorder()
++	handler := &MockInPlaceUpdateHandler{
++		control:  inplaceupdate.NewInPlaceUpdateControl(fakeClient, inplaceupdate.DefaultGeneratePatchBodyFunc),
++		recorder: recorder,
++		logger:   logr.Discard(),
++	}
++
++	result, err := handleInPlaceUpdateCommon(ctx, handler, pod, box, newStatus)
++	if err != nil {
++		t.Fatalf("Unexpected error: %v", err)
++	}
++	if !result {
++		t.Error("Expected result true (metadata patched directly), got false")
++	}
++
++	// Verify NO InplaceUpdate condition was set
++	for _, cond := range newStatus.Conditions {
++		if cond.Type == string(agentsv1alpha1.SandboxConditionInplaceUpdate) {
++			t.Errorf("InplaceUpdate condition should not be set for metadata-only change, got: %s/%s", cond.Reason, cond.Status)
++		}
++	}
++
++	// Verify the pod was actually patched: template hash label should match new revision
++	updatedPod := &corev1.Pod{}
++	if err := fakeClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "test-pod"}, updatedPod); err != nil {
++		t.Fatalf("Failed to get updated pod: %v", err)
++	}
++	if updatedPod.Labels[agentsv1alpha1.PodLabelTemplateHash] != hash {
++		t.Errorf("Expected pod template hash to be %s, got %s", hash, updatedPod.Labels[agentsv1alpha1.PodLabelTemplateHash])
++	}
++	if updatedPod.Labels["app"] != "test-app" {
++		t.Errorf("Expected pod label app=test-app, got %s", updatedPod.Labels["app"])
++	}
++}
++
++func TestIsMetadataOnlyChange(t *testing.T) {
++	tests := []struct {
++		name     string
++		pod      *corev1.Pod
++		box      *agentsv1alpha1.Sandbox
++		expected bool
++	}{
++		{
++			name: "identical image and resources",
++			pod: &corev1.Pod{
++				Spec: corev1.PodSpec{
++					Containers: []corev1.Container{{
++						Name:  "main",
++						Image: "nginx:latest",
++						Resources: corev1.ResourceRequirements{
++							Requests: corev1.ResourceList{
++								corev1.ResourceCPU: resource.MustParse("100m"),
++							},
++						},
++					}},
++				},
++			},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{
++					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
++						Template: &corev1.PodTemplateSpec{
++							Spec: corev1.PodSpec{
++								Containers: []corev1.Container{{
++									Name:  "main",
++									Image: "nginx:latest",
++									Resources: corev1.ResourceRequirements{
++										Requests: corev1.ResourceList{
++											corev1.ResourceCPU: resource.MustParse("100m"),
++										},
++									},
++								}},
++							},
++						},
++					},
++				},
++			},
++			expected: true,
++		},
++		{
++			name: "pod has extra injected resources (subset match)",
++			pod: &corev1.Pod{
++				Spec: corev1.PodSpec{
++					Containers: []corev1.Container{{
++						Name:  "main",
++						Image: "nginx:latest",
++						Resources: corev1.ResourceRequirements{
++							Requests: corev1.ResourceList{
++								corev1.ResourceCPU:              resource.MustParse("100m"),
++								corev1.ResourceMemory:           resource.MustParse("128Mi"),
++								corev1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
++							},
++							Limits: corev1.ResourceList{
++								corev1.ResourceCPU: resource.MustParse("500m"),
++							},
++						},
++					}},
++				},
++			},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{
++					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
++						Template: &corev1.PodTemplateSpec{
++							Spec: corev1.PodSpec{
++								Containers: []corev1.Container{{
++									Name:  "main",
++									Image: "nginx:latest",
++									Resources: corev1.ResourceRequirements{
++										Requests: corev1.ResourceList{
++											corev1.ResourceCPU:    resource.MustParse("100m"),
++											corev1.ResourceMemory: resource.MustParse("128Mi"),
++										},
++									},
++								}},
++							},
++						},
++					},
++				},
++			},
++			expected: true,
++		},
++		{
++			name: "image differs",
++			pod: &corev1.Pod{
++				Spec: corev1.PodSpec{
++					Containers: []corev1.Container{{
++						Name:  "main",
++						Image: "nginx:old",
++					}},
++				},
++			},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{
++					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
++						Template: &corev1.PodTemplateSpec{
++							Spec: corev1.PodSpec{
++								Containers: []corev1.Container{{
++									Name:  "main",
++									Image: "nginx:new",
++								}},
++							},
++						},
++					},
++				},
++			},
++			expected: false,
++		},
++		{
++			name: "template resource value differs",
++			pod: &corev1.Pod{
++				Spec: corev1.PodSpec{
++					Containers: []corev1.Container{{
++						Name:  "main",
++						Image: "nginx:latest",
++						Resources: corev1.ResourceRequirements{
++							Requests: corev1.ResourceList{
++								corev1.ResourceCPU: resource.MustParse("200m"),
++							},
++						},
++					}},
++				},
++			},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{
++					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
++						Template: &corev1.PodTemplateSpec{
++							Spec: corev1.PodSpec{
++								Containers: []corev1.Container{{
++									Name:  "main",
++									Image: "nginx:latest",
++									Resources: corev1.ResourceRequirements{
++										Requests: corev1.ResourceList{
++											corev1.ResourceCPU: resource.MustParse("100m"),
++										},
++									},
++								}},
++							},
++						},
++					},
++				},
++			},
++			expected: false,
++		},
++		{
++			name: "template resource missing from pod",
++			pod: &corev1.Pod{
++				Spec: corev1.PodSpec{
++					Containers: []corev1.Container{{
++						Name:  "main",
++						Image: "nginx:latest",
++					}},
++				},
++			},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{
++					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
++						Template: &corev1.PodTemplateSpec{
++							Spec: corev1.PodSpec{
++								Containers: []corev1.Container{{
++									Name:  "main",
++									Image: "nginx:latest",
++									Resources: corev1.ResourceRequirements{
++										Requests: corev1.ResourceList{
++											corev1.ResourceCPU: resource.MustParse("100m"),
++										},
++									},
++								}},
++							},
++						},
++					},
++				},
++			},
++			expected: false,
++		},
++		{
++			name: "nil template returns false",
++			pod:  &corev1.Pod{},
++			box: &agentsv1alpha1.Sandbox{
++				Spec: agentsv1alpha1.SandboxSpec{},
++			},
++			expected: false,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got := isMetadataOnlyChange(tt.pod, tt.box)
++			if got != tt.expected {
++				t.Errorf("isMetadataOnlyChange() = %v, want %v", got, tt.expected)
++			}
++		})
++	}
++}
++
+ func TestIsInplaceUpdateTerminal(t *testing.T) {
+ 	tests := []struct {
+ 		name     string
+diff --git a/pkg/sandbox-manager/api_test.go b/pkg/sandbox-manager/api_test.go
+index ecafe1e7..bcc47e77 100644
+--- a/pkg/sandbox-manager/api_test.go
++++ b/pkg/sandbox-manager/api_test.go
+@@ -122,6 +122,60 @@ func CreateSandboxWithStatus(t *testing.T, client ctrlclient.Client, sbx *agents
+ 	assert.NoError(t, err)
+ }
+ 
++// simulateInplaceUpdateControllerForApiTest simulates the controller processing
++// an in-place update by polling the fake client and setting the InplaceUpdate
++// condition to True/Succeeded, syncing ObservedGeneration, and setting Ready=True.
++// This allows tests with InplaceUpdate to pass without a real controller.
++//
++// This mirrors simulateInplaceUpdateController in pkg/sandbox-manager/infra/sandboxcr/claim_test.go.
++// If that function changes, update this one accordingly (or extract to a shared helper).
++func simulateInplaceUpdateControllerForApiTest(ctx context.Context, c ctrlclient.Client) {
++	go func() {
++		ticker := time.NewTicker(5 * time.Millisecond)
++		defer ticker.Stop()
++		for {
++			select {
++			case <-ctx.Done():
++				return
++			case <-ticker.C:
++			}
++			sbxList := &agentsv1alpha1.SandboxList{}
++			if err := c.List(ctx, sbxList); err != nil {
++				continue
++			}
++			for i := range sbxList.Items {
++				sbx := &sbxList.Items[i]
++				inplaceCond := utils.GetSandboxCondition(&sbx.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
++				if inplaceCond == nil || inplaceCond.Status != metav1.ConditionTrue {
++					// Fetch the latest resource version before updating
++					// status, since the fake client's Status().Update()
++					// checks resource versions and the object from List may
++					// be stale by the time we call Status().Update().
++					latest := &agentsv1alpha1.Sandbox{}
++					if err := c.Get(ctx, ctrlclient.ObjectKeyFromObject(sbx), latest); err != nil {
++						continue
++					}
++					latest.Status.ObservedGeneration = latest.Generation
++					latest.Status.Phase = agentsv1alpha1.SandboxRunning
++					utils.SetSandboxCondition(&latest.Status, metav1.Condition{
++						Type:               string(agentsv1alpha1.SandboxConditionInplaceUpdate),
++						Status:             metav1.ConditionTrue,
++						Reason:             agentsv1alpha1.SandboxInplaceUpdateReasonSucceeded,
++						LastTransitionTime: metav1.Now(),
++					})
++					utils.SetSandboxCondition(&latest.Status, metav1.Condition{
++						Type:               string(agentsv1alpha1.SandboxConditionReady),
++						Status:             metav1.ConditionTrue,
++						Reason:             agentsv1alpha1.SandboxReadyReasonPodReady,
++						LastTransitionTime: metav1.Now(),
++					})
++					_ = c.Status().Update(ctx, latest) //nolint:errcheck // expected on resource version conflicts; next tick will retry
++				}
++			}
++		}
++	}()
++}
++
+ func TestSandboxManager_ClaimSandbox(t *testing.T) {
+ 	testutils.InitLogOutput()
+ 	now := time.Now()
+@@ -203,6 +257,31 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
+ 				assert.Equal(t, "new-image", sbx.GetImage())
+ 			},
+ 		},
++		{
++			// Metadata-only change: labels are propagated via Modifier (MergePodLabels),
++			// without InplaceUpdate. The controller patches pod metadata directly
++			// without setting the InplaceUpdate condition, so no simulation goroutine
++			// is needed and the claim should succeed quickly.
++			name: "Claim with metadata-only labels (no inplace update)",
++			opts: infra.ClaimSandboxOptions{
++				User:     username,
++				Template: "exist-1",
++				Modifier: func(sbx infra.Sandbox) {
++					infra.MergePodLabels(sbx, map[string]string{
++						"app": "test-app",
++						"env": "prod",
++					})
++				},
++			},
++			templateSetup: map[string]int{
++				"exist-1": 1,
++			},
++			postCheck: func(t *testing.T, sbx infra.Sandbox) {
++				labels := sbx.GetPodLabels()
++				assert.Equal(t, "test-app", labels["app"], "pod label app should be set via MergePodLabels")
++				assert.Equal(t, "prod", labels["env"], "pod label env should be set via MergePodLabels")
++			},
++		},
+ 	}
+ 
+ 	for _, tt := range tests {
+@@ -280,7 +359,22 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
+ 				}, 100*time.Millisecond, 5*time.Millisecond)
+ 			}
+ 
+-			tt.opts.ClaimTimeout = 100 * time.Millisecond
++			// For tests with InplaceUpdate and available sandboxes (LockTypeUpdate),
++			// simulate the controller processing the in-place update by setting the
++			// InplaceUpdate condition to True/Succeeded.
++			hasAvailable := false
++			for _, count := range tt.templateSetup {
++				if count > 0 {
++					hasAvailable = true
++					break
++				}
++			}
++			if tt.opts.InplaceUpdate != nil && hasAvailable {
++				tt.opts.ClaimTimeout = 2 * time.Second
++				simulateInplaceUpdateControllerForApiTest(t.Context(), client)
++			} else {
++				tt.opts.ClaimTimeout = 100 * time.Millisecond
++			}
+ 			var claimed infra.Sandbox
+ 			err := retry.OnError(wait.Backoff{
+ 				Duration: 100 * time.Millisecond,
+diff --git a/pkg/sandbox-manager/config/infra.go b/pkg/sandbox-manager/config/infra.go
+index 27877a6f..b4b7d0eb 100644
+--- a/pkg/sandbox-manager/config/infra.go
++++ b/pkg/sandbox-manager/config/infra.go
+@@ -33,6 +33,8 @@ const DefaultCSIMountConcurrency = runtimeconfig.DefaultCSIMountConcurrency
+ func NewDefaultAccessToken() string { return runtimeconfig.NewDefaultAccessToken() }
+ 
+ // InplaceUpdateOptions stays in pkg/sandbox-manager/config — not used by pkg/utils.
++// Metadata (labels/annotations) changes are handled separately by the controller
++// via isMetadataOnlyChange and do not require InplaceUpdateOptions.
+ type InplaceUpdateOptions struct {
+ 	Image string
+ 	// Resources specifies in-place resource update options.
+diff --git a/pkg/sandbox-manager/infra/interface.go b/pkg/sandbox-manager/infra/interface.go
+index d1169b88..728decfc 100644
+--- a/pkg/sandbox-manager/infra/interface.go
++++ b/pkg/sandbox-manager/infra/interface.go
+@@ -152,6 +152,23 @@ type Sandbox interface {
+ 	CreateCheckpoint(ctx context.Context, opts CreateCheckpointOptions) (string, error)
+ }
+ 
++// MergePodLabels merges the given labels into the sandbox's pod template labels.
++// Existing labels with the same key are overwritten. The sandbox's pod template
++// is initialized if necessary.
++func MergePodLabels(sbx Sandbox, labels map[string]string) {
++	if len(labels) == 0 {
++		return
++	}
++	existing := sbx.GetPodLabels()
++	if existing == nil {
++		existing = make(map[string]string, len(labels))
++	}
++	for k, v := range labels {
++		existing[k] = v
++	}
++	sbx.SetPodLabels(existing)
++}
++
+ type CheckpointInfo struct {
+ 	Name              string
+ 	Namespace         string
+diff --git a/pkg/sandbox-manager/infra/sandboxcr/claim.go b/pkg/sandbox-manager/infra/sandboxcr/claim.go
+index dae39f22..95ab77c9 100644
+--- a/pkg/sandbox-manager/infra/sandboxcr/claim.go
++++ b/pkg/sandbox-manager/infra/sandboxcr/claim.go
+@@ -69,7 +69,7 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
+ 		}
+ 	}
+ 	if opts.InplaceUpdate != nil && opts.InplaceUpdate.Image == "" && opts.InplaceUpdate.Resources == nil {
+-		return infra.ClaimSandboxOptions{}, fmt.Errorf("inplace update requires either image or resources to be set")
++		return infra.ClaimSandboxOptions{}, fmt.Errorf("inplace update requires at least one of image or resources to be set")
+ 	}
+ 	if opts.InplaceUpdate != nil && opts.InplaceUpdate.Resources != nil {
+ 		res := opts.InplaceUpdate.Resources
+@@ -211,8 +211,21 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
+ 
+ 	// Step 3: Built-in post processes. The locked sandbox must be always returned to be cleared properly.
+ 	if lockType == infra.LockTypeCreate || lockType == infra.LockTypeSpeculate || opts.InplaceUpdate != nil {
+-		log.Info("should wait for sandbox ready", "inplaceUpdate", opts.InplaceUpdate != nil)
+-		metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, opts, cache)
++		// For LockTypeUpdate (existing sandbox from pool), an InplaceUpdate
++		// option with image or resources triggers a real in-place update by
++		// the controller. We must wait for the InplaceUpdate condition to
++		// become non-nil and True before reporting ready.
++		// Metadata-only changes are patched directly by the controller without
++		// setting the InplaceUpdate condition, so requireInplaceUpdateCompletion
++		// is false for those cases. The wait still ensures the controller has
++		// observed the new generation (ObservedGeneration == Generation).
++		// For LockTypeCreate/LockTypeSpeculate, the pod is created from the
++		// modified spec, so no in-place update occurs.
++		hasImageOrResourcesChange := opts.InplaceUpdate != nil &&
++			(opts.InplaceUpdate.Image != "" || opts.InplaceUpdate.Resources != nil)
++		requireInplaceUpdateCompletion := hasImageOrResourcesChange && lockType == infra.LockTypeUpdate
++		log.Info("should wait for sandbox ready", "inplaceUpdate", opts.InplaceUpdate != nil, "requireInplaceUpdateCompletion", requireInplaceUpdateCompletion)
++		metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, opts, cache, requireInplaceUpdateCompletion)
+ 		metrics.Total += metrics.WaitReady
+ 		if err != nil {
+ 			log.Error(err, "failed to wait for sandbox ready", "cost", metrics.WaitReady)
+@@ -726,15 +739,15 @@ func setContainerResources(container *corev1.Container, requests, limits corev1.
+ 	return changed
+ }
+ 
+-func waitForSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.ClaimSandboxOptions, cache infracache.Provider) (cost time.Duration, err error) {
++func waitForSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.ClaimSandboxOptions, cache infracache.Provider, requireInplaceUpdateCompletion bool) (cost time.Duration, err error) {
+ 	ctx = logs.Extend(ctx, "action", "waitForSandboxReady")
+ 	log := klog.FromContext(ctx).V(utils.DebugLogLevel).WithValues("sandbox", klog.KObj(sbx))
+ 	start := time.Now()
+ 	defer func() {
+ 		cost = time.Since(start)
+ 	}()
+-	log.Info("waiting for sandbox ready", "timeout", opts.WaitReadyTimeout)
+-	if err = cache.NewSandboxWaitReadyTask(ctx, sbx.Sandbox).Wait(opts.WaitReadyTimeout); err != nil {
++	log.Info("waiting for sandbox ready", "timeout", opts.WaitReadyTimeout, "requireInplaceUpdateCompletion", requireInplaceUpdateCompletion)
++	if err = cache.NewSandboxWaitReadyTask(ctx, sbx.Sandbox, requireInplaceUpdateCompletion).Wait(opts.WaitReadyTimeout); err != nil {
+ 		log.Error(err, "failed to wait for sandbox ready")
+ 		if errors.Is(err, cacheutils.ErrWaitNotSatisfied) {
+ 			if refreshErr := sbx.InplaceRefresh(ctx, true); refreshErr != nil {
+diff --git a/pkg/sandbox-manager/infra/sandboxcr/claim_test.go b/pkg/sandbox-manager/infra/sandboxcr/claim_test.go
+index 2ed9835b..c60abf25 100644
+--- a/pkg/sandbox-manager/infra/sandboxcr/claim_test.go
++++ b/pkg/sandbox-manager/infra/sandboxcr/claim_test.go
+@@ -83,6 +83,59 @@ func CreateSandboxWithStatus(t *testing.T, c client.Client, sbx *v1alpha1.Sandbo
+ 	require.NoError(t, err)
+ }
+ 
++// simulateInplaceUpdateController starts a background goroutine that polls the
++// fake client and simulates the controller processing an in-place update.
++// When it detects that the InplaceUpdate condition is nil or not True, it sets
++// the InplaceUpdate condition to True/Succeeded, the Ready condition to
++// True/PodReady, and syncs ObservedGeneration. This allows tests with
++// InplaceUpdate to pass without a real controller.
++func simulateInplaceUpdateController(ctx context.Context, c client.Client) {
++	go func() {
++		ticker := time.NewTicker(5 * time.Millisecond)
++		defer ticker.Stop()
++		for {
++			select {
++			case <-ctx.Done():
++				return
++			case <-ticker.C:
++				sbxList := &v1alpha1.SandboxList{}
++				if err := c.List(ctx, sbxList); err != nil {
++					continue
++				}
++				for i := range sbxList.Items {
++					sbx := &sbxList.Items[i]
++					inplaceCond := pkgutils.GetSandboxCondition(&sbx.Status, string(v1alpha1.SandboxConditionInplaceUpdate))
++					if inplaceCond == nil || inplaceCond.Status != metav1.ConditionTrue {
++						// Fetch the latest resource version before updating
++						// status, since the fake client's Status().Update()
++						// checks resource versions and the object from List may
++						// be stale by the time we call Status().Update().
++						latest := &v1alpha1.Sandbox{}
++						if err := c.Get(ctx, client.ObjectKeyFromObject(sbx), latest); err != nil {
++							continue
++						}
++						latest.Status.ObservedGeneration = latest.Generation
++						latest.Status.Phase = v1alpha1.SandboxRunning
++						pkgutils.SetSandboxCondition(&latest.Status, metav1.Condition{
++							Type:               string(v1alpha1.SandboxConditionInplaceUpdate),
++							Status:             metav1.ConditionTrue,
++							Reason:             v1alpha1.SandboxInplaceUpdateReasonSucceeded,
++							LastTransitionTime: metav1.Now(),
++						})
++						pkgutils.SetSandboxCondition(&latest.Status, metav1.Condition{
++							Type:               string(v1alpha1.SandboxConditionReady),
++							Status:             metav1.ConditionTrue,
++							Reason:             v1alpha1.SandboxReadyReasonPodReady,
++							LastTransitionTime: metav1.Now(),
++						})
++						_ = c.Status().Update(ctx, latest) //nolint:errcheck // expected on resource version conflicts; next tick will retry
++					}
++				}
++			}
++		}
++	}()
++}
++
+ var metricsAnnotationKey = v1alpha1.InternalPrefix + "metrics"
+ 
+ func GetMetricsFromSandbox(t *testing.T, sbx infra.Sandbox) infra.ClaimMetrics {
+@@ -487,7 +540,11 @@ func TestInfra_ClaimSandbox(t *testing.T) {
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			if tt.options.ClaimTimeout <= 0 {
+-				tt.options.ClaimTimeout = 50 * time.Millisecond
++				if tt.options.InplaceUpdate != nil && tt.available > 0 {
++					tt.options.ClaimTimeout = 2 * time.Second
++				} else {
++					tt.options.ClaimTimeout = 50 * time.Millisecond
++				}
+ 			}
+ 			testInfra, fc := NewTestInfra(t, tt.infraOptions)
+ 			now := metav1.Now()
+@@ -533,6 +590,28 @@ func TestInfra_ClaimSandbox(t *testing.T) {
+ 			if tt.preProcess != nil {
+ 				tt.preProcess(t, testInfra)
+ 			}
++			// For tests with InplaceUpdate and available sandboxes (LockTypeUpdate),
++			// simulate the controller processing the in-place update by setting
++			// the InplaceUpdate condition to True/Succeeded.
++			if tt.options.InplaceUpdate != nil && tt.available > 0 {
++				// Register available sandboxes as wait reconcile keys so the
++				// mock manager's wait simulation goroutine (500ms tick) will
++				// periodically reconcile them and resolve wait entries once
++				// the simulated controller updates the status.
++				if c, ok := testInfra.Cache.(*infracache.Cache); ok {
++					if mgr := c.GetMockManager(); mgr != nil {
++						for i := 0; i < tt.available; i++ {
++							mgr.AddWaitReconcileKey(&v1alpha1.Sandbox{
++								ObjectMeta: metav1.ObjectMeta{
++									Name:      fmt.Sprintf("sbx-%d", i),
++									Namespace: "default",
++								},
++							})
++						}
++					}
++				}
++				simulateInplaceUpdateController(t.Context(), fc)
++			}
+ 			claimCtx := t.Context()
+ 			if tt.claimCtx != nil {
+ 				claimCtx = tt.claimCtx(t.Context())
+@@ -1589,7 +1668,7 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
+ 				InplaceUpdate: &config.InplaceUpdateOptions{},
+ 			},
+ 			expectErr:   true,
+-			errContains: "requires either image or resources",
++			errContains: "requires at least one of image or resources",
+ 		},
+ 		{
+ 			name: "resources require requests or limits",
+diff --git a/pkg/sandbox-manager/infra/sandboxcr/clone.go b/pkg/sandbox-manager/infra/sandboxcr/clone.go
+index 1df3fc12..de4ed8f2 100644
+--- a/pkg/sandbox-manager/infra/sandboxcr/clone.go
++++ b/pkg/sandbox-manager/infra/sandboxcr/clone.go
+@@ -272,7 +272,7 @@ func cloneWaitSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.CloneSa
+ 	var err error
+ 	metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, infra.ClaimSandboxOptions{
+ 		WaitReadyTimeout: opts.WaitReadyTimeout,
+-	}, cache)
++	}, cache, false) // clone creates a new pod, no in-place update expected
+ 	metrics.Total += metrics.WaitReady
+ 	if err != nil {
+ 		log.Error(err, "failed to wait sandbox ready", "cost", metrics.WaitReady)
+diff --git a/pkg/sandbox-manager/infra/sandboxcr/sandbox_test.go b/pkg/sandbox-manager/infra/sandboxcr/sandbox_test.go
+index 9489da97..0a398963 100644
+--- a/pkg/sandbox-manager/infra/sandboxcr/sandbox_test.go
++++ b/pkg/sandbox-manager/infra/sandboxcr/sandbox_test.go
+@@ -1199,3 +1199,87 @@ func TestSandbox_CSIMount(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestMergePodLabels(t *testing.T) {
++	tests := []struct {
++		name           string
++		existingLabels map[string]string
++		inputLabels    map[string]string
++		wantLabels     map[string]string
++	}{
++		{
++			name:           "nil existing labels - initializes and sets all",
++			existingLabels: nil,
++			inputLabels:    map[string]string{"app": "sandbox", "env": "prod"},
++			wantLabels:     map[string]string{"app": "sandbox", "env": "prod"},
++		},
++		{
++			name:           "empty existing labels - initializes and sets all",
++			existingLabels: map[string]string{},
++			inputLabels:    map[string]string{"app": "sandbox"},
++			wantLabels:     map[string]string{"app": "sandbox"},
++		},
++		{
++			name:           "empty input labels - no change",
++			existingLabels: map[string]string{"app": "sandbox"},
++			inputLabels:    map[string]string{},
++			wantLabels:     map[string]string{"app": "sandbox"},
++		},
++		{
++			name:           "nil input labels - no change",
++			existingLabels: map[string]string{"app": "sandbox"},
++			inputLabels:    nil,
++			wantLabels:     map[string]string{"app": "sandbox"},
++		},
++		{
++			name:           "overwrite existing label with same key",
++			existingLabels: map[string]string{"app": "old", "env": "dev"},
++			inputLabels:    map[string]string{"app": "new"},
++			wantLabels:     map[string]string{"app": "new", "env": "dev"},
++		},
++		{
++			name:           "add new labels to existing",
++			existingLabels: map[string]string{"app": "sandbox"},
++			inputLabels:    map[string]string{"env": "prod", "tier": "frontend"},
++			wantLabels:     map[string]string{"app": "sandbox", "env": "prod", "tier": "frontend"},
++		},
++		{
++			name:           "both nil - no change",
++			existingLabels: nil,
++			inputLabels:    nil,
++			wantLabels:     nil,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			sbx := &Sandbox{
++				Sandbox: &v1alpha1.Sandbox{
++					Spec: v1alpha1.SandboxSpec{
++						EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
++							Template: &corev1.PodTemplateSpec{
++								ObjectMeta: metav1.ObjectMeta{
++									Labels: tt.existingLabels,
++								},
++								Spec: corev1.PodSpec{
++									Containers: []corev1.Container{{Name: "main", Image: "nginx:latest"}},
++								},
++							},
++						},
++					},
++				},
++			}
++			infra.MergePodLabels(sbx, tt.inputLabels)
++			got := sbx.GetPodLabels()
++			if len(got) != len(tt.wantLabels) {
++				t.Errorf("MergePodLabels() labels count = %d, want %d, got=%v, want=%v", len(got), len(tt.wantLabels), got, tt.wantLabels)
++				return
++			}
++			for k, wantVal := range tt.wantLabels {
++				if gotVal, ok := got[k]; !ok || gotVal != wantVal {
++					t.Errorf("MergePodLabels() label[%q] = %q, want %q", k, gotVal, wantVal)
++				}
++			}
++		})
++	}
++}
+diff --git a/pkg/servers/e2b/core_test.go b/pkg/servers/e2b/core_test.go
+index 6694aee8..f90d44a2 100644
+--- a/pkg/servers/e2b/core_test.go
++++ b/pkg/servers/e2b/core_test.go
+@@ -305,6 +305,16 @@ func CreateSandboxPool(t *testing.T, controller *Controller, name string, availa
+ 						Type:   string(agentsv1alpha1.SandboxConditionReady),
+ 						Status: metav1.ConditionTrue,
+ 					},
++					// Pre-set InplaceUpdate=True so that claim paths using
++					// InplaceUpdate (image, resources, or metadata/labels) can
++					// pass the requireInplaceUpdateCompletion check without a
++					// real controller. The fake client's WithStatusSubresource
++					// ensures this status is preserved across spec Update calls.
++					{
++						Type:   string(agentsv1alpha1.SandboxConditionInplaceUpdate),
++						Status: metav1.ConditionTrue,
++						Reason: agentsv1alpha1.SandboxInplaceUpdateReasonSucceeded,
++					},
+ 				},
+ 				PodInfo: agentsv1alpha1.PodInfo{
+ 					PodIP: "1.2.3.4",
+diff --git a/pkg/servers/e2b/create.go b/pkg/servers/e2b/create.go
+index 211261b7..41885d82 100644
+--- a/pkg/servers/e2b/create.go
++++ b/pkg/servers/e2b/create.go
+@@ -324,7 +324,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
+ 	}
+ 	sbx.SetAnnotations(annotations)
+ 
+-	// propagate labels to sandbox
++	// propagate labels to sandbox metadata (does not affect pod template hash)
+ 	labels := sbx.GetLabels()
+ 	if labels == nil {
+ 		labels = make(map[string]string)
+@@ -334,15 +334,11 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
+ 	}
+ 	sbx.SetLabels(labels)
+ 
+-	// propagate annotations to podtemplate
+-	labels = sbx.GetPodLabels()
+-	if labels == nil {
+-		labels = make(map[string]string)
+-	}
+-	for k, v := range request.Extensions.Labels {
+-		labels[k] = v
+-	}
+-	sbx.SetPodLabels(labels)
++	// Propagate request labels to the pod template metadata. This ensures the
++	// sandbox hash includes the labels, and the controller patches the pod metadata
++	// directly for metadata-only changes (no image/resources) without setting the
++	// InplaceUpdate condition.
++	infra.MergePodLabels(sbx, request.Extensions.Labels)
+ }
+ 
+ func (sc *Controller) csiMountOptionsConfigRecord(ctx context.Context, sbx infra.Sandbox, request models.NewSandboxRequest) {
+diff --git a/pkg/utils/inplaceupdate/inplace_update.go b/pkg/utils/inplaceupdate/inplace_update.go
+index cd77b166..dc5182b1 100644
+--- a/pkg/utils/inplaceupdate/inplace_update.go
++++ b/pkg/utils/inplaceupdate/inplace_update.go
+@@ -176,7 +176,7 @@ func DefaultGeneratePatchBodyFunc(opts InPlaceUpdateOptions) string {
+ 			continue
+ 		}
+ 		imageChanged := origin.Image != container.Image
+-		resourceChanged := !reflect.DeepEqual(origin.Resources, container.Resources)
++		resourceChanged := !ResourcesEqual(origin.Resources, container.Resources)
+ 		if !imageChanged && !resourceChanged {
+ 			continue
+ 		}
+@@ -281,7 +281,7 @@ func DefaultGenerateResizeSubresourceBody(opts InPlaceUpdateOptions) *corev1.Pod
+ 		if !ok {
+ 			continue
+ 		}
+-		if resourcesEqual(origin.Resources, container.Resources) {
++		if ResourcesEqual(origin.Resources, container.Resources) {
+ 			continue
+ 		}
+ 		// Merge origin resources into container, preserving system-injected fields
+@@ -596,7 +596,7 @@ func isPodResourceResizeCompleted(pod *corev1.Pod) bool {
+ 		if !ok || status.Resources == nil {
+ 			return false
+ 		}
+-		if !resourcesEqual(c.Resources, *status.Resources) {
++		if !reflect.DeepEqual(c.Resources, *status.Resources) {
+ 			return false
+ 		}
+ 	}
+@@ -644,11 +644,11 @@ func checkPodResizeInfeasible(pod *corev1.Pod) error {
+ 	return nil
+ }
+ 
+-// resourcesEqual compares two ResourceRequirements semantically.
++// ResourcesEqual compares two ResourceRequirements semantically.
+ // It only checks resources specified in 'desired' (the sandbox spec), ignoring extra resources
+ // in 'actual' (the pod) injected by the system (e.g., ephemeral-storage).
+ // It uses Quantity.Cmp() to handle different unit representations (e.g., "1" vs "1000m").
+-func resourcesEqual(desired, actual corev1.ResourceRequirements) bool {
++func ResourcesEqual(desired, actual corev1.ResourceRequirements) bool {
+ 	if !isResourceListCovered(actual.Limits, desired.Limits) {
+ 		return false
+ 	}
+diff --git a/pkg/utils/inplaceupdate/inplace_update_test.go b/pkg/utils/inplaceupdate/inplace_update_test.go
+index 3112b678..26bd89ff 100644
+--- a/pkg/utils/inplaceupdate/inplace_update_test.go
++++ b/pkg/utils/inplaceupdate/inplace_update_test.go
+@@ -2884,9 +2884,9 @@ func TestResourcesEqual(t *testing.T) {
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			got := resourcesEqual(tt.desired, tt.actual)
++			got := ResourcesEqual(tt.desired, tt.actual)
+ 			if got != tt.expect {
+-				t.Errorf("resourcesEqual() = %v, want %v", got, tt.expect)
++				t.Errorf("ResourcesEqual() = %v, want %v", got, tt.expect)
+ 			}
+ 		})
+ 	}
