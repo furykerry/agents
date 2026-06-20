@@ -74,15 +74,16 @@ type Provider interface {
 
 	// NewSandboxWaitReadyTask builds an immutable wait task for post-claim
 	// readiness (Generation observed + Ready condition not StartContainerFailed
-	// + not InplaceUpdating + Running + PodIP set).
+	// + Running + PodIP set).
 	//
 	// When requireInplaceUpdateCompletion is true, the task additionally
 	// requires the InplaceUpdate condition to be non-nil and True before
 	// reporting ready. This prevents premature readiness when an in-place
-	// update (image, resources, or metadata change) has been requested but
-	// the controller has not yet processed it. If the controller reports
+	// update (image or resources change) has been requested but the
+	// controller has not yet processed it. If the controller reports
 	// the InplaceUpdate condition as Failed, the task returns an error
-	// immediately instead of waiting for timeout.
+	// immediately instead of waiting for timeout. When false, the
+	// InplaceUpdate condition is not checked at all.
 	NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, requireInplaceUpdateCompletion bool) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
 
 	// NewCheckpointTask builds an immutable wait task for a Checkpoint that

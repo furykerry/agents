@@ -102,11 +102,12 @@ func (c *Cache) NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sa
 //
 // When requireInplaceUpdateCompletion is true, the task additionally requires
 // the InplaceUpdate condition to be non-nil and True before reporting ready.
-// This prevents premature readiness when an in-place update (image, resources,
-// or metadata change) has been requested but the controller has not yet
-// processed it. If the controller reports the InplaceUpdate condition as
-// Failed, the task returns an error immediately instead of waiting for
-// timeout.
+// This prevents premature readiness when an in-place update (image or resources
+// change) has been requested but the controller has not yet processed it. If the
+// controller reports the InplaceUpdate condition as Failed, the task returns an
+// error immediately instead of waiting for timeout.
+// When requireInplaceUpdateCompletion is false, the InplaceUpdate condition is
+// not checked at all.
 func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, requireInplaceUpdateCompletion bool) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
 	check := func(s *agentsv1alpha1.Sandbox) (bool, error) {
 		if s.Status.ObservedGeneration != s.Generation {
@@ -116,12 +117,12 @@ func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1
 		if readyCond != nil && readyCond.Reason == agentsv1alpha1.SandboxReadyReasonStartContainerFailed {
 			return false, fmt.Errorf("sandbox start container failed: %s", readyCond.Message)
 		}
-		inplaceCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
 		if requireInplaceUpdateCompletion {
 			// Wait for the controller to set the InplaceUpdate condition and
 			// for it to reach a terminal True state (Succeeded). A nil
 			// condition means the controller has not yet observed the spec
 			// change that triggers the in-place update.
+			inplaceCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
 			if inplaceCond == nil {
 				return false, nil
 			}
@@ -131,8 +132,6 @@ func (c *Cache) NewSandboxWaitReadyTask(ctx context.Context, sbx *agentsv1alpha1
 			if inplaceCond.Status != metav1.ConditionTrue {
 				return false, nil
 			}
-		} else if inplaceCond != nil && inplaceCond.Reason == agentsv1alpha1.SandboxInplaceUpdateReasonInplaceUpdating {
-			return false, nil
 		}
 		state, _ := utils.GetSandboxState(s)
 		return state == agentsv1alpha1.SandboxStateRunning && s.Status.PodInfo.PodIP != "", nil
