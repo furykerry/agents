@@ -122,6 +122,52 @@ func CreateSandboxWithStatus(t *testing.T, client ctrlclient.Client, sbx *agents
 	assert.NoError(t, err)
 }
 
+// simulateInplaceUpdateControllerForApiTest simulates the controller processing
+// an in-place update by polling the fake client and setting the InplaceUpdate
+// condition to True/Succeeded, syncing ObservedGeneration, and setting Ready=True.
+// This allows tests with InplaceUpdate to pass without a real controller.
+func simulateInplaceUpdateControllerForApiTest(ctx context.Context, c ctrlclient.Client) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			sbxList := &agentsv1alpha1.SandboxList{}
+			if err := c.List(ctx, sbxList); err != nil {
+				continue
+			}
+			for i := range sbxList.Items {
+				sbx := &sbxList.Items[i]
+				inplaceCond := utils.GetSandboxCondition(&sbx.Status, string(agentsv1alpha1.SandboxConditionInplaceUpdate))
+				if inplaceCond == nil || inplaceCond.Status != metav1.ConditionTrue {
+					latest := &agentsv1alpha1.Sandbox{}
+					if err := c.Get(ctx, ctrlclient.ObjectKeyFromObject(sbx), latest); err != nil {
+						continue
+					}
+					latest.Status.ObservedGeneration = latest.Generation
+					latest.Status.Phase = agentsv1alpha1.SandboxRunning
+					utils.SetSandboxCondition(&latest.Status, metav1.Condition{
+						Type:               string(agentsv1alpha1.SandboxConditionInplaceUpdate),
+						Status:             metav1.ConditionTrue,
+						Reason:             agentsv1alpha1.SandboxInplaceUpdateReasonSucceeded,
+						LastTransitionTime: metav1.Now(),
+					})
+					utils.SetSandboxCondition(&latest.Status, metav1.Condition{
+						Type:               string(agentsv1alpha1.SandboxConditionReady),
+						Status:             metav1.ConditionTrue,
+						LastTransitionTime: metav1.Now(),
+					})
+					_ = c.Status().Update(ctx, latest)
+				}
+			}
+		}
+	}()
+}
+
 func TestSandboxManager_ClaimSandbox(t *testing.T) {
 	testutils.InitLogOutput()
 	now := time.Now()
@@ -280,7 +326,22 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				}, 100*time.Millisecond, 5*time.Millisecond)
 			}
 
-			tt.opts.ClaimTimeout = 100 * time.Millisecond
+			// For tests with InplaceUpdate and available sandboxes (LockTypeUpdate),
+			// simulate the controller processing the in-place update by setting the
+			// InplaceUpdate condition to True/Succeeded.
+			hasAvailable := false
+			for _, count := range tt.templateSetup {
+				if count > 0 {
+					hasAvailable = true
+					break
+				}
+			}
+			if tt.opts.InplaceUpdate != nil && hasAvailable {
+				tt.opts.ClaimTimeout = 2 * time.Second
+				simulateInplaceUpdateControllerForApiTest(t.Context(), client)
+			} else {
+				tt.opts.ClaimTimeout = 100 * time.Millisecond
+			}
 			var claimed infra.Sandbox
 			err := retry.OnError(wait.Backoff{
 				Duration: 100 * time.Millisecond,
