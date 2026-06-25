@@ -1249,6 +1249,36 @@ func TestMergePodLabels(t *testing.T) {
 			inputLabels:    nil,
 			wantLabels:     nil,
 		},
+		{
+			name:           "both empty maps - no change",
+			existingLabels: map[string]string{},
+			inputLabels:    map[string]string{},
+			wantLabels:     map[string]string{},
+		},
+		{
+			name:           "empty string value - valid label",
+			existingLabels: map[string]string{"app": "sandbox"},
+			inputLabels:    map[string]string{"note": ""},
+			wantLabels:     map[string]string{"app": "sandbox", "note": ""},
+		},
+		{
+			name:           "overwrite all existing labels",
+			existingLabels: map[string]string{"app": "old", "env": "dev"},
+			inputLabels:    map[string]string{"app": "new", "env": "prod"},
+			wantLabels:     map[string]string{"app": "new", "env": "prod"},
+		},
+		{
+			name:           "kubernetes-style dotted label keys",
+			existingLabels: map[string]string{"app.kubernetes.io/name": "sandbox"},
+			inputLabels:    map[string]string{"app.kubernetes.io/instance": "prod", "app.kubernetes.io/managed-by": "kruise"},
+			wantLabels:     map[string]string{"app.kubernetes.io/name": "sandbox", "app.kubernetes.io/instance": "prod", "app.kubernetes.io/managed-by": "kruise"},
+		},
+		{
+			name:           "single label added to multiple existing",
+			existingLabels: map[string]string{"app": "sandbox", "env": "prod", "tier": "frontend"},
+			inputLabels:    map[string]string{"version": "v1"},
+			wantLabels:     map[string]string{"app": "sandbox", "env": "prod", "tier": "frontend", "version": "v1"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1282,6 +1312,55 @@ func TestMergePodLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMergePodLabels_NilTemplate(t *testing.T) {
+	// When the sandbox's pod template is nil, GetPodLabels returns nil and
+	// SetPodLabels is a no-op. MergePodLabels should not panic and the labels
+	// are silently dropped.
+	sbx := &Sandbox{
+		Sandbox: &v1alpha1.Sandbox{
+			Spec: v1alpha1.SandboxSpec{
+				EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+					Template: nil,
+				},
+			},
+		},
+	}
+	assert.NotPanics(t, func() {
+		infra.MergePodLabels(sbx, map[string]string{"app": "sandbox", "env": "prod"})
+	})
+	assert.Nil(t, sbx.GetPodLabels())
+}
+
+func TestMergePodLabels_Idempotent(t *testing.T) {
+	// Calling MergePodLabels twice with the same labels should produce the
+	// same result as calling it once.
+	sbx := &Sandbox{
+		Sandbox: &v1alpha1.Sandbox{
+			Spec: v1alpha1.SandboxSpec{
+				EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+					Template: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{"app": "sandbox"},
+						},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{Name: "main", Image: "nginx:latest"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	input := map[string]string{"env": "prod", "tier": "frontend"}
+	infra.MergePodLabels(sbx, input)
+	infra.MergePodLabels(sbx, input)
+	got := sbx.GetPodLabels()
+	assert.Equal(t, map[string]string{
+		"app":   "sandbox",
+		"env":   "prod",
+		"tier":  "frontend",
+	}, got)
 }
 
 func TestSandbox_TriggerReuse(t *testing.T) {
