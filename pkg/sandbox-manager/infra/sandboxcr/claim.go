@@ -211,21 +211,8 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 
 	// Step 3: Built-in post processes. The locked sandbox must be always returned to be cleared properly.
 	if lockType == infra.LockTypeCreate || lockType == infra.LockTypeSpeculate || opts.InplaceUpdate != nil {
-		// For LockTypeUpdate (existing sandbox from pool), an InplaceUpdate
-		// option with image or resources triggers a real in-place update by
-		// the controller. We must wait for the InplaceUpdate condition to
-		// become non-nil and True before reporting ready.
-		// Metadata-only changes are patched directly by the controller without
-		// setting the InplaceUpdate condition, so requireInplaceUpdateCompletion
-		// is false for those cases. The wait still ensures the controller has
-		// observed the new generation (ObservedGeneration == Generation).
-		// For LockTypeCreate/LockTypeSpeculate, the pod is created from the
-		// modified spec, so no in-place update occurs.
-		hasImageOrResourcesChange := opts.InplaceUpdate != nil &&
-			(opts.InplaceUpdate.Image != "" || opts.InplaceUpdate.Resources != nil)
-		requireInplaceUpdateCompletion := hasImageOrResourcesChange && lockType == infra.LockTypeUpdate
-		log.Info("should wait for sandbox ready", "inplaceUpdate", opts.InplaceUpdate != nil, "requireInplaceUpdateCompletion", requireInplaceUpdateCompletion)
-		metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, opts, cache, requireInplaceUpdateCompletion)
+		log.Info("should wait for sandbox ready", "inplaceUpdate", opts.InplaceUpdate != nil)
+		metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, opts, cache)
 		metrics.Total += metrics.WaitReady
 		if err != nil {
 			log.Error(err, "failed to wait for sandbox ready", "cost", metrics.WaitReady)
@@ -745,15 +732,15 @@ func setContainerResources(container *corev1.Container, requests, limits corev1.
 	return changed
 }
 
-func waitForSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.ClaimSandboxOptions, cache infracache.Provider, requireInplaceUpdateCompletion bool) (cost time.Duration, err error) {
+func waitForSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.ClaimSandboxOptions, cache infracache.Provider) (cost time.Duration, err error) {
 	ctx = logs.Extend(ctx, "action", "waitForSandboxReady")
 	log := klog.FromContext(ctx).V(utils.DebugLogLevel).WithValues("sandbox", klog.KObj(sbx))
 	start := time.Now()
 	defer func() {
 		cost = time.Since(start)
 	}()
-	log.Info("waiting for sandbox ready", "timeout", opts.WaitReadyTimeout, "requireInplaceUpdateCompletion", requireInplaceUpdateCompletion)
-	if err = cache.NewSandboxWaitReadyTask(ctx, sbx.Sandbox, requireInplaceUpdateCompletion).Wait(opts.WaitReadyTimeout); err != nil {
+	log.Info("waiting for sandbox ready", "timeout", opts.WaitReadyTimeout)
+	if err = cache.NewSandboxWaitReadyTask(ctx, sbx.Sandbox).Wait(opts.WaitReadyTimeout); err != nil {
 		log.Error(err, "failed to wait for sandbox ready")
 		if errors.Is(err, cacheutils.ErrWaitNotSatisfied) {
 			if refreshErr := sbx.InplaceRefresh(ctx, true); refreshErr != nil {
