@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
@@ -596,7 +595,7 @@ func isPodResourceResizeCompleted(pod *corev1.Pod) bool {
 		if !ok || status.Resources == nil {
 			return false
 		}
-		if !reflect.DeepEqual(c.Resources, *status.Resources) {
+		if !ResourcesEqual(c.Resources, *status.Resources) {
 			return false
 		}
 	}
