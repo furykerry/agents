@@ -1256,7 +1256,8 @@ func TestDecodeHeadersAuthDisabled(t *testing.T) {
 
 // TestDecodeHeadersWakeOnTrafficCacheFallback verifies that when
 // route.WakeOnTraffic is false (registry not yet synced) but the informer
-// cache has the wake-on-traffic annotation, the filter still attempts wake.
+// cache has the wake-on-traffic annotation, ResolveRoute provides the
+// informer's fresh route (with WakeOnTraffic=true) and the filter attempts wake.
 // The wake fails because the sandbox is not actually resumable in this test
 // setup, so we get 503 (wake failed) instead of 502 (not wakeable).
 func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
@@ -1270,13 +1271,27 @@ func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
 		ResourceVersion: "1",
 	})
 
-	// Create sandbox with wake annotation in the informer cache
+	// Create sandbox with wake annotation and proper status in the informer cache.
+	// ResolveRoute builds a fresh route from this sandbox, so it needs
+	// Phase=Paused and PodIP for GetRouteFromSandbox to return state=paused.
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cache-fallback",
 			Namespace: "default",
 			Annotations: map[string]string{
 				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
+			},
+			Labels: map[string]string{
+				agentsv1alpha1.LabelSandboxIsClaimed: "true",
+			},
+		},
+		Spec: agentsv1alpha1.SandboxSpec{
+			Paused: true,
+		},
+		Status: agentsv1alpha1.SandboxStatus{
+			Phase: agentsv1alpha1.SandboxPaused,
+			PodInfo: agentsv1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
 			},
 		},
 	}
@@ -1323,11 +1338,25 @@ func TestDecodeHeadersWakeOnTrafficCacheFallbackNoAnnotation(t *testing.T) {
 		ResourceVersion: "1",
 	})
 
-	// Create sandbox WITHOUT wake annotation in the informer cache
+	// Create sandbox WITHOUT wake annotation in the informer cache.
+	// ResolveRoute returns the informer's route (WakeOnTraffic=false),
+	// so no wake is attempted.
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "no-annot-fallback",
 			Namespace: "default",
+			Labels: map[string]string{
+				agentsv1alpha1.LabelSandboxIsClaimed: "true",
+			},
+		},
+		Spec: agentsv1alpha1.SandboxSpec{
+			Paused: true,
+		},
+		Status: agentsv1alpha1.SandboxStatus{
+			Phase: agentsv1alpha1.SandboxPaused,
+			PodInfo: agentsv1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
+			},
 		},
 	}
 	cacheProvider, _, err := cachetest.NewTestCache(t, sbx)

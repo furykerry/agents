@@ -29,6 +29,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
+	"github.com/openkruise/agents/pkg/proxy"
 )
 
 func TestInitWakerAndGetWaker(t *testing.T) {
@@ -137,6 +138,155 @@ func TestHasWakeAnnotation(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestResolveRoute(t *testing.T) {
+	tests := []struct {
+		name           string
+		sandboxID      string
+		registryRoute  proxy.Route
+		createSbx      bool
+		sbxAnnotations map[string]string
+		sbxPaused      bool
+		wantState      string
+		wantWake       bool
+		wantFound      bool
+		wakerNil       bool
+	}{
+		{
+			name:      "nil waker returns original route",
+			sandboxID: "default--sbx1",
+			registryRoute: proxy.Route{
+				State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "100",
+			},
+			wantState: agentsv1alpha1.SandboxStateRunning,
+			wantFound: false,
+			wakerNil:  true,
+		},
+		{
+			name:      "invalid sandbox ID returns original route",
+			sandboxID: "no-dashes",
+			registryRoute: proxy.Route{
+				State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "100",
+			},
+			wantState: agentsv1alpha1.SandboxStateRunning,
+			wantFound: false,
+		},
+		{
+			name:      "sandbox not found returns original route",
+			sandboxID: "default--missing",
+			registryRoute: proxy.Route{
+				State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "100",
+			},
+			createSbx: false,
+			wantState: agentsv1alpha1.SandboxStateRunning,
+			wantFound: false,
+		},
+		{
+			name:      "informer found: returns informer paused state",
+			sandboxID: "default--sbx-paused",
+			registryRoute: proxy.Route{
+				State:           agentsv1alpha1.SandboxStateRunning,
+				ResourceVersion: "100",
+				WakeOnTraffic:   false,
+			},
+			createSbx: true,
+			sbxAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
+			},
+			sbxPaused: true,
+			wantState: agentsv1alpha1.SandboxStatePaused,
+			wantWake:  true,
+			wantFound: true,
+		},
+		{
+			name:      "informer found: returns informer running state",
+			sandboxID: "default--sbx-running",
+			registryRoute: proxy.Route{
+				State:           agentsv1alpha1.SandboxStatePaused,
+				ResourceVersion: "300",
+				WakeOnTraffic:   true,
+			},
+			createSbx: true,
+			sbxPaused: false, // informer says running
+			wantState: agentsv1alpha1.SandboxStateRunning,
+			wantWake:  false,
+			wantFound: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wakerNil {
+				var nilWaker *Waker
+				got, found := nilWaker.ResolveRoute(context.Background(), tt.sandboxID, tt.registryRoute)
+				assert.Equal(t, tt.wantState, got.State)
+				assert.Equal(t, tt.wantFound, found)
+				return
+			}
+
+			var initObjs []ctrl.Object
+			if tt.createSbx {
+				parts := splitSandboxID(tt.sandboxID)
+				sbx := &agentsv1alpha1.Sandbox{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      parts[1],
+						Namespace: parts[0],
+						Annotations: tt.sbxAnnotations,
+						Labels: map[string]string{
+							agentsv1alpha1.LabelSandboxIsClaimed: "true",
+						},
+					},
+					Spec: agentsv1alpha1.SandboxSpec{
+						Paused: tt.sbxPaused,
+					},
+					Status: agentsv1alpha1.SandboxStatus{
+						Phase: agentsv1alpha1.SandboxRunning,
+						PodInfo: agentsv1alpha1.PodInfo{
+							PodIP: "10.0.0.1",
+						},
+					},
+				}
+				if tt.sbxPaused {
+					sbx.Status.Phase = agentsv1alpha1.SandboxPaused
+				} else {
+					// Running sandboxes need the Ready condition for
+					// GetSandboxState to return SandboxStateRunning.
+					sbx.Status.Conditions = []metav1.Condition{
+						{
+							Type:   string(agentsv1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					}
+				}
+				initObjs = append(initObjs, sbx)
+			}
+
+			cacheProvider, fc, err := cachetest.NewTestCache(t, initObjs...)
+			require.NoError(t, err)
+
+			// Status subresource objects need explicit status sync.
+			for _, obj := range initObjs {
+				require.NoError(t, fc.Status().Update(t.Context(), obj))
+			}
+
+			waker := &Waker{cache: cacheProvider}
+			got, found := waker.ResolveRoute(context.Background(), tt.sandboxID, tt.registryRoute)
+			assert.Equal(t, tt.wantFound, found, "found")
+			assert.Equal(t, tt.wantState, got.State, "state")
+			assert.Equal(t, tt.wantWake, got.WakeOnTraffic, "wakeOnTraffic")
+		})
+	}
+}
+
+// splitSandboxID splits "namespace--name" into [namespace, name].
+func splitSandboxID(id string) [2]string {
+	for i := 0; i < len(id)-1; i++ {
+		if id[i] == '-' && id[i+1] == '-' {
+			return [2]string{id[:i], id[i+2:]}
+		}
+	}
+	return [2]string{"", id}
 }
 
 // newPausedSandbox creates a Sandbox CR in Paused state with Paused condition True.
