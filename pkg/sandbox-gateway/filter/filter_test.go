@@ -21,13 +21,10 @@ import (
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 	"github.com/stretchr/testify/assert"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
-	"github.com/openkruise/agents/pkg/sandbox-gateway/wake"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 )
 
@@ -1252,136 +1249,4 @@ func TestDecodeHeadersAuthDisabled(t *testing.T) {
 	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
 	assert.NotNil(t, metadata)
 	assert.Equal(t, "10.0.0.5:49983", metadata["host"])
-}
-
-// TestDecodeHeadersWakeOnTrafficCacheFallback verifies that when
-// route.WakeOnTraffic is false (registry not yet synced) but the informer
-// cache has the wake-on-traffic annotation, ResolveRoute provides the
-// informer's fresh route (with WakeOnTraffic=true) and the filter attempts wake.
-// The wake fails because the sandbox is not actually resumable in this test
-// setup, so we get 503 (wake failed) instead of 502 (not wakeable).
-func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
-	r := registry.GetRegistry()
-	defer r.Clear()
-	// Registry has WakeOnTraffic=false (simulating sync delay)
-	r.Update("default--cache-fallback", proxy.Route{
-		IP:              "10.0.0.1",
-		State:           agentsv1alpha1.SandboxStatePaused,
-		WakeOnTraffic:   false,
-		ResourceVersion: "1",
-	})
-
-	// Create sandbox with wake annotation and proper status in the informer cache.
-	// ResolveRoute builds a fresh route from this sandbox, so it needs
-	// Phase=Paused and PodIP for GetRouteFromSandbox to return state=paused.
-	sbx := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cache-fallback",
-			Namespace: "default",
-			Annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
-			},
-			Labels: map[string]string{
-				agentsv1alpha1.LabelSandboxIsClaimed: "true",
-			},
-		},
-		Spec: agentsv1alpha1.SandboxSpec{
-			Paused: true,
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			Phase: agentsv1alpha1.SandboxPaused,
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.1",
-			},
-		},
-	}
-	cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
-	if err != nil {
-		t.Fatalf("failed to create test cache: %v", err)
-	}
-
-	// Initialize the package-level waker with the test cache
-	wake.InitWaker(cacheProvider)
-	t.Cleanup(func() {
-		wake.InitWaker(nil)
-	})
-
-	cfg := DefaultConfig()
-	cfg.EnableWakeOnTraffic = true
-	cfg.WakeTimeoutSeconds = 5
-	mockCallbacks := newMockFilterCallbackHandler()
-	filter := &sandboxFilter{callbacks: mockCallbacks, config: cfg, adapter: defaultTestAdapter()}
-
-	header := newMockRequestHeaderMap()
-	header.Set(DefaultSandboxHeaderName, "default--cache-fallback")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// The filter should attempt wake via the cache fallback.
-	// Wake fails (sandbox not resumable in test) -> 503 wake_failed.
-	// Without the fallback, the filter would return 502 (not_running).
-	assert.Equal(t, api.LocalReply, status)
-	assert.Equal(t, 503, mockCallbacks.decoderCallbacks.replyStatusCode)
-	assert.Equal(t, "sandbox_wake_failed", mockCallbacks.decoderCallbacks.replyDetails)
-}
-
-// TestDecodeHeadersWakeOnTrafficCacheFallbackNoAnnotation verifies that when
-// both route.WakeOnTraffic is false and the informer cache does NOT have the
-// annotation, the filter does NOT attempt wake and returns 502.
-func TestDecodeHeadersWakeOnTrafficCacheFallbackNoAnnotation(t *testing.T) {
-	r := registry.GetRegistry()
-	defer r.Clear()
-	r.Update("default--no-annot-fallback", proxy.Route{
-		IP:              "10.0.0.1",
-		State:           agentsv1alpha1.SandboxStatePaused,
-		WakeOnTraffic:   false,
-		ResourceVersion: "1",
-	})
-
-	// Create sandbox WITHOUT wake annotation in the informer cache.
-	// ResolveRoute returns the informer's route (WakeOnTraffic=false),
-	// so no wake is attempted.
-	sbx := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-annot-fallback",
-			Namespace: "default",
-			Labels: map[string]string{
-				agentsv1alpha1.LabelSandboxIsClaimed: "true",
-			},
-		},
-		Spec: agentsv1alpha1.SandboxSpec{
-			Paused: true,
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			Phase: agentsv1alpha1.SandboxPaused,
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.1",
-			},
-		},
-	}
-	cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
-	if err != nil {
-		t.Fatalf("failed to create test cache: %v", err)
-	}
-
-	wake.InitWaker(cacheProvider)
-	t.Cleanup(func() {
-		wake.InitWaker(nil)
-	})
-
-	cfg := DefaultConfig()
-	cfg.EnableWakeOnTraffic = true
-	cfg.WakeTimeoutSeconds = 5
-	mockCallbacks := newMockFilterCallbackHandler()
-	filter := &sandboxFilter{callbacks: mockCallbacks, config: cfg, adapter: defaultTestAdapter()}
-
-	header := newMockRequestHeaderMap()
-	header.Set(DefaultSandboxHeaderName, "default--no-annot-fallback")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// No annotation in cache -> no wake attempt -> 502 not_running
-	assert.Equal(t, api.LocalReply, status)
-	assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-	assert.Equal(t, "sandbox_not_running", mockCallbacks.decoderCallbacks.replyDetails)
 }

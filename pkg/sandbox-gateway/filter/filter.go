@@ -103,19 +103,6 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		return api.LocalReply
 	}
 
-	// Resolve the effective route by comparing ResourceVersions:
-	// the registry route may be stale when the sandbox controller updates
-	// the sandbox (e.g. auto-pause) without syncing routes to the gateway
-	// peers. ResolveRoute fetches the sandbox from the informer cache and
-	// returns a fresh route if the informer's ResourceVersion is newer.
-	// This is the single point of truth for route state in the filter.
-	if waker := wake.GetWaker(); waker != nil {
-		resolved, found := waker.ResolveRoute(context.Background(), sandboxID, route)
-		if found {
-			route = resolved
-		}
-	}
-
 	if route.State != agentsv1alpha1.SandboxStateRunning {
 		// Attempt wake-on-traffic if the sandbox is paused and wake is enabled.
 		waker := wake.GetWaker()
