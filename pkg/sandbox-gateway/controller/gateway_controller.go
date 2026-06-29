@@ -84,7 +84,7 @@ func StartManager(ctx context.Context) error {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{
-			ByObject:                   byObject,
+			ByObject:                     byObject,
 			DefaultUnsafeDisableDeepCopy: ptr.To(true),
 		},
 		// Disable metrics and health probe servers to avoid port conflicts with Envoy.
