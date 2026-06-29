@@ -1652,7 +1652,7 @@ func TestIsSandboxResumable(t *testing.T) {
 		name           string
 		sandbox        *agentsv1alpha1.Sandbox
 		expectedResult bool
-		expectedReason string
+		expectError    error
 	}{
 		{
 			name: "Running sandbox is resumable",
@@ -1662,7 +1662,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: true,
-			expectedReason: "SandboxIsRunning",
+			expectError:    nil,
 		},
 		{
 			name: "Running sandbox with spec.paused=true is not resumable (pausing in progress)",
@@ -1675,7 +1675,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: false,
-			expectedReason: "SandboxIsPausing",
+			expectError:    ErrSandboxIsPausing,
 		},
 		{
 			name: "Resuming sandbox is resumable",
@@ -1685,7 +1685,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: true,
-			expectedReason: "SandboxIsResuming",
+			expectError:    nil,
 		},
 		{
 			name: "Paused sandbox with paused condition is resumable",
@@ -1701,7 +1701,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: true,
-			expectedReason: "SandboxIsPaused",
+			expectError:    nil,
 		},
 		{
 			name: "Paused sandbox without paused condition is not resumable",
@@ -1711,7 +1711,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: false,
-			expectedReason: "SandboxIsPausing",
+			expectError:    ErrSandboxIsPausing,
 		},
 		{
 			name: "Succeeded sandbox is not resumable",
@@ -1721,7 +1721,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: false,
-			expectedReason: "SandboxPhaseNotAllowed",
+			expectError:    ErrSandboxPhaseNotAllowed,
 		},
 		{
 			name: "Deleting sandbox is not resumable",
@@ -1741,7 +1741,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: false,
-			expectedReason: "SandboxIsTerminating",
+			expectError:    ErrSandboxIsTerminating,
 		},
 		{
 			name: "ShutdownTime reached sandbox is not resumable",
@@ -1760,7 +1760,7 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: false,
-			expectedReason: "ShutdownTimeReached",
+			expectError:    ErrShutdownTimeReached,
 		},
 		{
 			name: "ShutdownTime not reached falls through to phase check",
@@ -1779,15 +1779,19 @@ func TestIsSandboxResumable(t *testing.T) {
 				},
 			},
 			expectedResult: true,
-			expectedReason: "SandboxIsPaused",
+			expectError:    nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, reason := IsSandboxResumable(tt.sandbox)
+			result, err := IsSandboxResumable(tt.sandbox)
 			assert.Equal(t, tt.expectedResult, result)
-			assert.Equal(t, tt.expectedReason, reason)
+			if tt.expectError != nil {
+				assert.ErrorIs(t, err, tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

@@ -175,19 +175,19 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	log.V(utils.DebugLogLevel).Info("Received route refresh", "route", route)
 
 	// Handle based on state.
-	// Running and paused routes are kept in the registry so the filter
-	// can detect paused sandboxes and trigger wake-on-traffic.
-	// Other states (dead, creating, available) mean the sandbox is not
-	// routable — remove from the registry.
+	// Only dead and empty-state routes are removed from the registry.
+	// All other states (running, paused, creating, available) are kept
+	// so the filter has full visibility for routing decisions.
 	switch route.State {
-	case v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused:
+	case v1alpha1.SandboxStateDead, "":
+		registry.GetRegistry().Delete(route.ID)
+		log.Info("Route removed via refresh", "id", route.ID, "state", route.State)
+	default:
 		if registry.GetRegistry().Update(route.ID, route) {
 			log.Info("Route updated via refresh", "id", route.ID, "ip", route.IP, "state", route.State)
 		} else {
 			log.V(utils.DebugLogLevel).Info("Route update skipped due to older resourceVersion", "id", route.ID)
 		}
-	default:
-		registry.GetRegistry().Delete(route.ID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

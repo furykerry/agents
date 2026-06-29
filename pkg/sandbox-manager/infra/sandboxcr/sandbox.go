@@ -363,8 +363,8 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 		return err
 	}
 
-	if resumable, reason := utils.IsSandboxResumable(s.Sandbox); !resumable {
-		return errors.NewError(errors.ErrorConflict, "sandbox is not resumable, reason: %s", reason)
+	if resumable, err := utils.IsSandboxResumable(s.Sandbox); !resumable {
+		return errors.NewErrorWrap(errors.ErrorConflict, err, "sandbox is not resumable, reason: %s", err.Error())
 	}
 	resumeTask, err := s.Cache.NewSandboxResumeTask(ctx, s.Sandbox)
 	if err != nil {

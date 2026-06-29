@@ -18,8 +18,8 @@ package wake
 
 import (
 	"context"
+	"errors"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +33,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-gateway/server"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
@@ -128,8 +129,8 @@ func (w *Waker) Wake(ctx context.Context, namespace, name string, defaultWakeTim
 		if resumeErr == nil {
 			break
 		}
-		// Only retry on "SandboxIsPausing" — other errors are fatal.
-		if !strings.Contains(resumeErr.Error(), "SandboxIsPausing") {
+		// Only retry on SandboxIsPausing — other errors are fatal.
+		if !errors.Is(resumeErr, utils.ErrSandboxIsPausing) {
 			return resumeErr
 		}
 		log.Info("sandbox still pausing, retrying wake", "error", resumeErr)
