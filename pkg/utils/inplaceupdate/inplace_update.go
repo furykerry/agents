@@ -669,6 +669,24 @@ func IsResourceSatisfied(desired, actual corev1.ResourceRequirements) bool {
 	return true
 }
 
+// ResourcesExactlyEqual checks whether the actual resources exactly match the desired resources.
+// Unlike IsResourceSatisfied, this requires exact equality (not >=) and is used by callers
+// that need to detect any resource drift, including when actual exceeds desired (e.g., VPA modifications).
+func ResourcesExactlyEqual(desired, actual corev1.ResourceRequirements) bool {
+	return isResourceListExactlyEqual(actual.Limits, desired.Limits) &&
+		isResourceListExactlyEqual(actual.Requests, desired.Requests)
+}
+
+func isResourceListExactlyEqual(actual, expected corev1.ResourceList) bool {
+	for name, expectedQ := range expected {
+		actualQ, ok := actual[name]
+		if !ok || actualQ.Cmp(expectedQ) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // isResourceListCovered checks whether every resource in 'expected' is satisfied by 'actual'.
 // It uses Cmp instead of equality because some environments round up or adjust container
 // resources (e.g., Kubernetes CPU/memory normalization), so an exact match is too strict.
