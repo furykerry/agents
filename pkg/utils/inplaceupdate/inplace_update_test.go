@@ -2923,7 +2923,7 @@ func TestResourceListContains(t *testing.T) {
 	}
 }
 
-func TestResourcesEqual(t *testing.T) {
+func TestIsResourceSatisfied(t *testing.T) {
 	tests := []struct {
 		name    string
 		desired corev1.ResourceRequirements
@@ -3077,9 +3077,9 @@ func TestResourcesEqual(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ResourcesEqual(tt.desired, tt.actual)
+			got := IsResourceSatisfied(tt.desired, tt.actual)
 			if got != tt.expect {
-				t.Errorf("ResourcesEqual() = %v, want %v", got, tt.expect)
+				t.Errorf("IsResourceSatisfied() = %v, want %v", got, tt.expect)
 			}
 		})
 	}
