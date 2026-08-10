@@ -88,7 +88,10 @@ func StaleSandboxPodOwner(pod *corev1.Pod, box *agentsv1alpha1.Sandbox) (types.U
 	for i := range pod.OwnerReferences {
 		ref := &pod.OwnerReferences[i]
 		if ref.Kind == "Sandbox" && ref.APIVersion == agentsv1alpha1.SchemeGroupVersion.String() {
-			return ref.UID, ref.UID != box.UID
+			if ref.UID == box.UID {
+				return "", false
+			}
+			return ref.UID, true
 		}
 	}
 	return "", false
