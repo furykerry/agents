@@ -8,6 +8,8 @@ import pytest
 import requests
 from e2b_code_interpreter import Sandbox, SandboxState
 
+from utils import resolve_sandbox_cr
+
 GATEWAY_URL = "http://localhost:80"
 # Health-check path routed to manager_cluster by Envoy (prefix: /kruise/api).
 # GET /health is the manager's dedicated health endpoint (returns 200 OK).
@@ -36,22 +38,18 @@ def _gateway_health_check():
         return False
 
 
-def _split_sandbox_id(sandbox_id: str) -> tuple[str | None, str]:
-    """Split a sandbox ID into namespace and resource name."""
-    if "--" not in sandbox_id:
-        return None, sandbox_id
-    namespace, name = sandbox_id.split("--", 1)
-    return namespace, name
+def _get_sandbox_annotations(sbx: Sandbox) -> dict:
+    """Fetch the annotations of a Sandbox CR via kubectl.
 
-
-def _get_sandbox_annotations(sandbox_id: str) -> dict:
-    """Fetch the annotations of a Sandbox CR via kubectl."""
-    namespace, name = _split_sandbox_id(sandbox_id)
-    cmd = ["kubectl", "get", "sandbox", name, "-o", "json"]
-    if namespace:
-        cmd.extend(["-n", namespace])
+    The E2B sandbox ID is not necessarily the CR name: sandboxes claimed
+    from a pre-warmed pool keep their original name and carry the ID in the
+    agents.kruise.io/sandbox-id label. Resolve the CR through the shared
+    resolver instead of treating the ID as a name.
+    """
+    namespace, name = resolve_sandbox_cr(sbx.sandbox_id, getattr(sbx, "metadata", None))
+    assert namespace and name, f"could not resolve Sandbox CR for id {sbx.sandbox_id}"
     result = subprocess.run(
-        cmd,
+        ["kubectl", "get", "sandbox", name, "-n", namespace, "-o", "json"],
         capture_output=True,
         text=True,
         check=True,
@@ -107,7 +105,7 @@ def test_wake_on_traffic(sandbox_context):
     assert sbx.get_info().state == SandboxState.RUNNING
 
     # Step 2: Verify wake annotations were set by the API.
-    annotations = _get_sandbox_annotations(sandbox_id)
+    annotations = _get_sandbox_annotations(sbx)
     assert annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
         f"autoResume=true should set wake-on-traffic annotation, got: {annotations}"
     )
@@ -193,7 +191,7 @@ def test_wake_on_traffic(sandbox_context):
     # Step 8: Verify wake-on-traffic annotation persists after wake.
     # The Resume operation should preserve the wake annotations (they are
     # part of the sandbox metadata, not stripped by Resume).
-    post_wake_annotations = _get_sandbox_annotations(sandbox_id)
+    post_wake_annotations = _get_sandbox_annotations(sbx)
     assert post_wake_annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
         f"wake-on-traffic annotation should persist after wake, got: {post_wake_annotations}"
     )
