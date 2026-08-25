@@ -344,7 +344,7 @@ func TestWake(t *testing.T) {
 				require.NotNil(t, updated.Spec.ShutdownTime, "ShutdownTime should be preserved")
 				assert.WithinDuration(t, tt.shutdownTime.Time, updated.Spec.ShutdownTime.Time, time.Second)
 			}
-			
+
 			// Verify PauseTime is not injected for never-timeout or shutdown-only sandboxes
 			if tt.pauseTime == nil {
 				assert.Nil(t, updated.Spec.PauseTime, "PauseTime should not be injected for non-auto-pause sandboxes")
