@@ -448,7 +448,11 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	}
 	if request.AutoResume.Enabled {
 		annotations[agentsv1alpha1.AnnotationWakeOnTraffic] = agentsv1alpha1.True
-		if !request.Extensions.NeverTimeout && request.Timeout > 0 {
+		// The wake timeout only feeds the fresh PauseTime that the gateway
+		// wake path writes for auto-pause sandboxes; shutdown-only
+		// sandboxes never carry a PauseTime, so skip the annotation to
+		// avoid misleading metadata.
+		if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
 			if _, exists := annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds]; !exists {
 				annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds] = strconv.Itoa(request.Timeout)
 			}

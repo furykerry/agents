@@ -1009,6 +1009,7 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
+				AutoPause:  true,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
 			},
 			maxTimeout: 3600,
@@ -1022,6 +1023,7 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
+				AutoPause:  true,
 				Metadata: map[string]string{
 					agentsv1alpha1.AnnotationWakeTimeoutSeconds: "180",
 				},
@@ -1032,6 +1034,23 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
 				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "180",
 			},
+		},
+		{
+			// Shutdown-only lifecycle: the wake timeout only feeds the
+			// fresh PauseTime of auto-pause sandboxes, so the annotation
+			// would be misleading metadata.
+			name: "autoResume enabled without auto-pause skips wake timeout annotation",
+			request: models.NewSandboxRequest{
+				TemplateID: "t1",
+				Timeout:    300,
+				AutoPause:  false,
+				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
+			},
+			maxTimeout: 3600,
+			expectAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
+			},
+			expectNoAnnotations: []string{agentsv1alpha1.AnnotationWakeTimeoutSeconds},
 		},
 		{
 			name: "autoResume disabled does not set wake-on-traffic annotation",
