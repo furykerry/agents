@@ -174,9 +174,13 @@ func TestWake(t *testing.T) {
 		shutdownTime   *metav1.Time
 		pauseTime      *metav1.Time
 		defaultTimeout time.Duration
-		skipCreate     bool
-		simulateResume bool
-		expectError    string
+		// wantPauseSeconds, when > 0, asserts the fresh PauseTime written by
+		// the wake is now + wantPauseSeconds (i.e. the resume timeout floor
+		// has been applied to the effective value).
+		wantPauseSeconds int
+		skipCreate       bool
+		simulateResume   bool
+		expectError      string
 	}{
 		{
 			name:           "sandbox not found returns error",
@@ -194,8 +198,10 @@ func TestWake(t *testing.T) {
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
 			defaultTimeout: 60 * time.Second,
-			simulateResume: true,
-			expectError:    "",
+			// 60s default is below the resume floor and must be raised.
+			wantPauseSeconds: 300,
+			simulateResume:   true,
+			expectError:      "",
 		},
 		{
 			name:        "wake with annotation timeout",
@@ -204,11 +210,43 @@ func TestWake(t *testing.T) {
 			annotations: map[string]string{
 				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "120",
 			},
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 60 * time.Second,
-			simulateResume: true,
-			expectError:    "",
+			shutdownTime: &metav1.Time{Time: shutdownTime},
+			pauseTime:    &metav1.Time{Time: pauseTime},
+			// 120s is below the resume floor and must be raised.
+			defaultTimeout:   60 * time.Second,
+			wantPauseSeconds: 300,
+			simulateResume:   true,
+			expectError:      "",
+		},
+		{
+			name:        "wake annotation below resume floor is raised to floor",
+			sandboxName: "sbx-annot-below-floor",
+			sandboxNS:   "default",
+			annotations: map[string]string{
+				// The create API allows wake timeouts as short as 30s; the
+				// written PauseTime must not expire mid-resume.
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "30",
+			},
+			shutdownTime:     &metav1.Time{Time: shutdownTime},
+			pauseTime:        &metav1.Time{Time: pauseTime},
+			defaultTimeout:   60 * time.Second,
+			wantPauseSeconds: 300,
+			simulateResume:   true,
+			expectError:      "",
+		},
+		{
+			name:        "wake annotation above resume floor unchanged",
+			sandboxName: "sbx-annot-above-floor",
+			sandboxNS:   "default",
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "600",
+			},
+			shutdownTime:     &metav1.Time{Time: shutdownTime},
+			pauseTime:        &metav1.Time{Time: pauseTime},
+			defaultTimeout:   60 * time.Second,
+			wantPauseSeconds: 600,
+			simulateResume:   true,
+			expectError:      "",
 		},
 		{
 			name:        "invalid annotation falls back to default",
@@ -244,8 +282,11 @@ func TestWake(t *testing.T) {
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
 			defaultTimeout: 30 * time.Second,
-			simulateResume: true,
-			expectError:    "",
+			// The 30s wait deadline is raised to the resume floor before it
+			// is written as the fresh PauseTime.
+			wantPauseSeconds: 300,
+			simulateResume:   true,
+			expectError:      "",
 		},
 		{
 			name:           "wake preserves nil ShutdownTime",
@@ -348,6 +389,14 @@ func TestWake(t *testing.T) {
 			// Verify PauseTime is not injected for never-timeout or shutdown-only sandboxes
 			if tt.pauseTime == nil {
 				assert.Nil(t, updated.Spec.PauseTime, "PauseTime should not be injected for non-auto-pause sandboxes")
+			}
+
+			// Verify the fresh PauseTime carries the floored effective timeout
+			if tt.wantPauseSeconds > 0 {
+				require.NotNil(t, updated.Spec.PauseTime, "PauseTime should be written for auto-pause sandboxes")
+				wantPauseTime := time.Now().Add(time.Duration(tt.wantPauseSeconds) * time.Second)
+				assert.WithinDuration(t, wantPauseTime, updated.Spec.PauseTime.Time, 10*time.Second,
+					"fresh PauseTime must reflect the effective (floored) wake timeout")
 			}
 		})
 	}

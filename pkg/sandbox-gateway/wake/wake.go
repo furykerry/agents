@@ -135,8 +135,21 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 		// ShutdownTime so the auto-delete deadline is not lost. Without this,
 		// setTimeout() inside Resume would nil out ShutdownTime, causing
 		// resource leaks.
+		//
+		// The create API allows wake timeouts as short as 30s; reuse the same
+		// Resume timeout floor the E2B Connect/Resume paths apply so the
+		// fresh PauseTime cannot expire while the sandbox is still resuming
+		// (the controller checks PauseTime before Resume handling and would
+		// re-pause it mid-resume).
+		requestedSeconds := int(wakeTimeout / time.Second)
+		effectiveSeconds := timeout.ApplyResumeTimeoutFloor(requestedSeconds, timeout.DefaultMinResumeTimeoutSeconds)
+		if effectiveSeconds != requestedSeconds {
+			log.Info("wake timeout floor applied",
+				"requestedSeconds", requestedSeconds,
+				"effectiveSeconds", effectiveSeconds)
+		}
 		opts.Timeout = &timeout.Options{
-			PauseTime: time.Now().Add(wakeTimeout),
+			PauseTime: time.Now().Add(time.Duration(effectiveSeconds) * time.Second),
 		}
 		if sbx.Spec.ShutdownTime != nil {
 			opts.Timeout.ShutdownTime = sbx.Spec.ShutdownTime.Time
