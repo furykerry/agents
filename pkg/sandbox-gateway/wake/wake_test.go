@@ -191,6 +191,18 @@ func TestWake(t *testing.T) {
 			expectError:    "not found",
 		},
 		{
+			// Wake must reject a non-positive fallback timeout explicitly
+			// instead of relying on an instant context deadline.
+			name:           "non-positive default timeout rejected",
+			sandboxName:    "sbx-zero-timeout",
+			sandboxNS:      "default",
+			annotations:    map[string]string{},
+			shutdownTime:   &metav1.Time{Time: shutdownTime},
+			pauseTime:      &metav1.Time{Time: pauseTime},
+			defaultTimeout: 0,
+			expectError:    "must be positive",
+		},
+		{
 			name:           "successful wake with default timeout",
 			sandboxName:    "sbx-default",
 			sandboxNS:      "default",

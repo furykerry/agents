@@ -85,13 +85,15 @@ func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) b
 // for this caller only, without affecting other concurrent or future callers.
 // Resume itself provides first-writer-wins dedup via retryUpdate.
 //
-// defaultWakeTimeout must be positive.  The caller (typically the filter) is
-// responsible for providing a valid timeout via Config.GetWakeTimeoutSeconds()
-// which defaults to 60s when the configured value is <= 0.
+// The caller derives the wake deadline itself (the filter wraps a detached
+// context with Config.GetWakeTimeoutSeconds()); Wake does not wrap ctx
+// again. defaultWakeTimeout is only the fallback timeout used when the
+// sandbox carries no wake-timeout-seconds annotation, and must be positive.
 func (w *Waker) Wake(ctx context.Context, namespace, name string, defaultWakeTimeout time.Duration) error {
-	wakeCtx, wakeCancel := context.WithTimeout(ctx, defaultWakeTimeout)
-	defer wakeCancel()
-	return w.wakeInternal(wakeCtx, namespace, name, defaultWakeTimeout)
+	if defaultWakeTimeout <= 0 {
+		return fmt.Errorf("wake default timeout must be positive, got %v", defaultWakeTimeout)
+	}
+	return w.wakeInternal(ctx, namespace, name, defaultWakeTimeout)
 }
 
 // wakeInternal performs the actual wake work: reads annotations from cache,

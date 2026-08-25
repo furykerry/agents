@@ -160,6 +160,9 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 			// returns Running to tell Envoy to suspend request
 			// processing. wakeAndContinue will call Continue or
 			// SendLocalReply when the wake completes.
+			//
+			// This context carries the sole wake deadline; Wake receives
+			// waitTimeout only as the annotation-fallback default.
 			waitTimeout := time.Duration(f.config.GetWakeTimeoutSeconds()) * time.Second
 			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 			f.mu.Lock()
