@@ -185,15 +185,24 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		header.Set(k, v)
 	}
 
+	f.applyUpstreamOverrides(route, sandboxPort)
+	return api.Continue
+}
+
+// applyUpstreamOverrides routes the request to the sandbox upstream: it sets
+// the envoy.lb.original_dst override and, for runtime-port traffic when
+// runtime mTLS is enabled, selects the mTLS upstream cluster and re-resolves
+// the route. The normal Running path and the async wake completion path must
+// apply identical overrides so a request that triggered a wake continues
+// exactly like a request that arrived on a Running sandbox.
+func (f *sandboxFilter) applyUpstreamOverrides(route sandboxroute.Route, sandboxPort int) {
 	upstreamHost := fmt.Sprintf("%s:%d", route.IP, sandboxPort)
 	f.callbacks.StreamInfo().DynamicMetadata().Set("envoy.lb.original_dst", "host", upstreamHost)
 	if f.config.EnableRuntimeMTLS && sandboxPort == utils.RuntimePort {
 		f.callbacks.StreamInfo().DynamicMetadata().Set(runtimeMTLSMetadataNamespace, runtimeMTLSMetadataKey, true)
 		f.callbacks.ClearRouteCache()
 	}
-
-	log.Debug("Upstream override set successfully", zap.String("upstreamHost", upstreamHost))
-	return api.Continue
+	logger.Debug("Upstream override set successfully", zap.String("upstreamHost", upstreamHost))
 }
 
 func (f *sandboxFilter) authenticate(header api.RequestHeaderMap, route sandboxroute.Route) api.StatusType {
@@ -381,8 +390,9 @@ func (f *sandboxFilter) completeWithContinue(route sandboxroute.Route, sandboxPo
 	f.callbacks.DecoderFilterCallbacks().Continue(api.Continue)
 }
 
-// setUpstreamMetadata sets the envoy.lb.original_dst dynamic metadata.
-// Returns false if the stream was destroyed during the call.
+// setUpstreamMetadata applies the upstream overrides (original_dst and, when
+// applicable, the runtime mTLS selection) for a request resumed after an
+// async wake. Returns false if the stream was destroyed during the call.
 func (f *sandboxFilter) setUpstreamMetadata(route sandboxroute.Route, sandboxPort int) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -399,9 +409,7 @@ func (f *sandboxFilter) setUpstreamMetadata(route sandboxroute.Route, sandboxPor
 			ok = false
 		}
 	}()
-	upstreamHost := fmt.Sprintf("%s:%d", route.IP, sandboxPort)
-	f.callbacks.StreamInfo().DynamicMetadata().Set("envoy.lb.original_dst", "host", upstreamHost)
-	logger.Debug("Upstream override set successfully (async)", zap.String("upstreamHost", upstreamHost))
+	f.applyUpstreamOverrides(route, sandboxPort)
 	return true
 }
 

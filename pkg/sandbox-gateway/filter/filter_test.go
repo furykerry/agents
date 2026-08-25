@@ -1525,6 +1525,10 @@ func TestWakeAndContinueSuccess(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnableWakeOnTraffic = true
 	cfg.WakeTimeoutSeconds = 30
+	// The wake request targets the runtime port, so with runtime mTLS
+	// enabled the resumed request must take the same mTLS path a normal
+	// Running request would.
+	cfg.EnableRuntimeMTLS = true
 
 	done := make(chan struct{}, 1)
 	mockCallbacks := &mockFilterCallbackHandler{
@@ -1558,6 +1562,13 @@ func TestWakeAndContinueSuccess(t *testing.T) {
 	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
 	assert.NotNil(t, metadata)
 	assert.Equal(t, "10.0.0.1:49983", metadata["host"])
+
+	// Verify the resumed request takes the runtime mTLS path like a
+	// normal Running request: mTLS dynamic metadata set and route cache
+	// cleared.
+	mtlsMetadata := mockCallbacks.streamInfo.dynamicMetadata.data[runtimeMTLSMetadataNamespace]
+	assert.Equal(t, true, mtlsMetadata[runtimeMTLSMetadataKey])
+	assert.Equal(t, 1, mockCallbacks.clearRouteCalls)
 }
 
 // TestShouldWakeSandbox tests the pure branches of shouldWakeSandbox that
