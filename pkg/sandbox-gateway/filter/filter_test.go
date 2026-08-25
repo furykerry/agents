@@ -1304,6 +1304,9 @@ func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
 	assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
 	assert.Equal(t, 503, mockCallbacks.decoderCallbacks.replyStatusCode)
 	assert.Equal(t, "sandbox_wake_failed", mockCallbacks.decoderCallbacks.replyDetails)
+	// The body must stay generic: Kubernetes API error details must not be
+	// echoed to external callers.
+	assert.Equal(t, "sandbox wake failed", mockCallbacks.decoderCallbacks.replyBody)
 }
 
 // TestDecodeHeadersWakeOnTrafficCacheFallbackNoAnnotation verifies that when

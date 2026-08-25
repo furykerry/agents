@@ -345,7 +345,10 @@ func (f *sandboxFilter) wakeAndContinue(
 			return
 		}
 		log.Warn("Sandbox wake failed", zap.Error(err))
-		f.sendLocalReplyOnce(503, "sandbox wake failed: "+err.Error(), "sandbox_wake_failed")
+		// Keep the reply body generic: err can carry Kubernetes API error
+		// strings (namespaces, names, conflict details) that must not be
+		// echoed to external callers. The detail is logged above.
+		f.sendLocalReplyOnce(503, "sandbox wake failed", "sandbox_wake_failed")
 		return
 	}
 
