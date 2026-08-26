@@ -151,10 +151,12 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 	var opts infra.ResumeOptions
 	if hasDeadline && autoPause && wakeTimeout > 0 {
 		// Auto-pause sandbox: set a fresh PauseTime so the sandbox has
-		// running time before its next auto-pause, and preserve the existing
-		// ShutdownTime so the auto-delete deadline is not lost. Without this,
-		// setTimeout() inside Resume would nil out ShutdownTime, causing
-		// resource leaks.
+		// running time before its next auto-pause. ShutdownTime is set
+		// directly to the "forever" retention horizon (now + 100 years):
+		// traffic woke the sandbox, so it must not be auto-deleted by a
+		// stale or soon-to-expire retained ShutdownTime; the next pause
+		// recomputes ShutdownTime from the paused-retention policy. Without
+		// a ShutdownTime here, setTimeout() inside Resume would nil it out.
 		//
 		// The create API allows wake timeouts as short as 30s; reuse the same
 		// Resume timeout floor the E2B Connect/Resume paths apply so the
@@ -169,10 +171,8 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 				"effectiveSeconds", effectiveSeconds)
 		}
 		opts.Timeout = &timeout.Options{
-			PauseTime: time.Now().Add(time.Duration(effectiveSeconds) * time.Second),
-		}
-		if sbx.Spec.ShutdownTime != nil {
-			opts.Timeout.ShutdownTime = sbx.Spec.ShutdownTime.Time
+			PauseTime:    time.Now().Add(time.Duration(effectiveSeconds) * time.Second),
+			ShutdownTime: time.Now().Add(timeout.ForeverReservePausedSandboxDuration),
 		}
 	}
 	// For never-timeout sandboxes (no PauseTime, no ShutdownTime) and

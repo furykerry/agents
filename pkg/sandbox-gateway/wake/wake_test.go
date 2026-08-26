@@ -29,6 +29,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
+	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 func TestInitWakerAndGetWaker(t *testing.T) {
@@ -392,8 +393,15 @@ func TestWake(t *testing.T) {
 			require.NoError(t, fc.Get(t.Context(), ctrl.ObjectKey{Namespace: tt.sandboxNS, Name: tt.sandboxName}, &updated))
 			assert.False(t, updated.Spec.Paused, "sandbox should be unpaused after wake")
 
-			// Verify ShutdownTime is preserved
-			if tt.shutdownTime != nil {
+			// Auto-pause wakes overwrite ShutdownTime with the "forever"
+			// retention horizon (now + 100 years); other modes leave it
+			// untouched.
+			if tt.pauseTime != nil && tt.shutdownTime != nil {
+				require.NotNil(t, updated.Spec.ShutdownTime, "ShutdownTime should be set for auto-pause wakes")
+				wantShutdown := time.Now().Add(timeout.ForeverReservePausedSandboxDuration)
+				assert.WithinDuration(t, wantShutdown, updated.Spec.ShutdownTime.Time, 10*time.Second,
+					"auto-pause wake must set ShutdownTime to the forever retention horizon")
+			} else if tt.shutdownTime != nil {
 				require.NotNil(t, updated.Spec.ShutdownTime, "ShutdownTime should be preserved")
 				assert.WithinDuration(t, tt.shutdownTime.Time, updated.Spec.ShutdownTime.Time, time.Second)
 			}
