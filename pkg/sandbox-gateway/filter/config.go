@@ -67,9 +67,15 @@ type Config struct {
 	// EnableWakeOnTraffic enables wake-on-traffic for paused sandboxes.
 	// When true, the gateway will attempt to resume a paused sandbox by
 	// patching Spec.Paused=false when traffic arrives.
+	// Listener-level only: per-route configuration is NOT supported. Merge
+	// only lets an explicit true override the listener value, so a
+	// per-route false cannot disable wake enabled at the listener level.
 	EnableWakeOnTraffic bool `json:"enable-wake-on-traffic,omitempty"`
 	// WakeTimeoutSeconds is the max time (in seconds) to wait for a sandbox
 	// to resume before returning an error. Defaults to 60.
+	// Listener-level only: per-route configuration is NOT supported. Every
+	// parsed config carries the default 60, so any per-route config block
+	// would unintentionally reset a listener-level timeout.
 	WakeTimeoutSeconds int `json:"wake-timeout-seconds,omitempty"`
 }
 
@@ -293,6 +299,9 @@ func (p *ConfigParser) Merge(parent interface{}, child interface{}) interface{} 
 	if childCfg.trafficAccessTokenHeaderExplicit {
 		merged.TrafficAccessTokenHeader = childCfg.TrafficAccessTokenHeader
 	}
+	// Wake-on-traffic is listener-level configuration: per-route overrides
+	// are not supported. Only an explicit true / positive value propagates;
+	// a per-route config can neither disable wake nor reset the timeout.
 	if childCfg.EnableWakeOnTraffic {
 		merged.EnableWakeOnTraffic = childCfg.EnableWakeOnTraffic
 	}
