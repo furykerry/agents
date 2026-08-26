@@ -58,31 +58,37 @@ def _get_sandbox_annotations(sbx: Sandbox) -> dict:
     return cr.get("metadata", {}).get("annotations", {})
 
 
-def _request_gateway_until_forwarded(headers: dict, timeout_sec: int = 120) -> requests.Response:
-    """Send requests to the gateway until we get a non-502/503 response.
+# Response bodies of every local reply the gateway filter can send instead of
+# forwarding the request upstream. A response carrying any of these bodies was
+# produced by the gateway itself, not by the sandbox, so it cannot prove the
+# pending wake request was continued.
+_GATEWAY_LOCAL_REPLY_BODIES = (
+    "sandbox gateway is not ready",
+    "sandbox not found:",
+    "unauthorized: invalid or missing access token",
+    "forbidden:",
+    "service unavailable: traffic access token verifier is not ready",
+    "healthy sandbox not found:",
+    "wake failed",
+    "sandbox wake failed",
+)
 
-    The wake-on-traffic filter may return 502/503 while the sandbox is still
-    resuming. We poll with a short interval to avoid flaky tests.
+
+def _send_single_wake_request(headers: dict, timeout_sec: int = 180) -> requests.Response:
+    """Send exactly one request through the gateway and return its response.
+
+    The wake-on-traffic filter holds this very request (api.Running) while
+    the sandbox resumes and continues it once the sandbox is Ready, so the
+    response proves both that the wake happened and that the original
+    request was forwarded upstream. The client timeout must cover the full
+    wake budget.
+
+    Deliberately no retry: a retried request can succeed once the sandbox
+    is Running even if the original pending request was never continued,
+    which would hide a broken wake-completion path. Retries belong in the
+    pre-wake synchronization steps only.
     """
-    deadline = time.time() + timeout_sec
-    last_resp = None
-    attempt = 0
-    while time.time() < deadline:
-        attempt += 1
-        try:
-            resp = requests.get(
-                f"{GATEWAY_URL}/",
-                headers=headers,
-                timeout=30,
-            )
-            last_resp = resp
-            print(f"gateway attempt {attempt}: status={resp.status_code}")
-            if resp.status_code not in (502, 503):
-                return resp
-        except Exception as e:
-            print(f"gateway attempt {attempt}: error={e}")
-        time.sleep(2)
-    return last_resp
+    return requests.get(f"{GATEWAY_URL}/", headers=headers, timeout=timeout_sec)
 
 
 @pytest.mark.skipif(_SDK_LACKS_AUTO_PAUSE, reason="SDK lacks lifecycle on_timeout pause")
@@ -139,7 +145,7 @@ def test_wake_on_traffic(sandbox_context):
         "The port-forward may have dropped during the auto-pause wait."
     )
 
-    # Step 5: Send traffic through the gateway (triggers wake).
+    # Step 5: Send a single request through the gateway (triggers wake).
     # The wake-on-traffic annotation was set by the API (autoResume=true),
     # so the gateway registry already has WakeOnTraffic=true.
     #
@@ -156,17 +162,24 @@ def test_wake_on_traffic(sandbox_context):
         headers["X-Access-Token"] = access_token
 
     print(f"sending wake traffic to {GATEWAY_URL} for {sandbox_id}")
-    resp = _request_gateway_until_forwarded(headers, timeout_sec=120)
-    assert resp is not None, "gateway did not respond within timeout"
+    resp = _send_single_wake_request(headers, timeout_sec=180)
     print(f"wake response: status={resp.status_code} body={resp.text[:200]!r}")
     print(f"wake response headers: {dict(resp.headers)}")
 
-    # Step 6: Assert wake succeeded (not 502/503)
-    assert resp.status_code != 502, (
-        f"Gateway 502: sandbox {sandbox_id} not found or not running after wake"
+    # Step 6: Assert the single pending request was continued to the
+    # sandbox's envd upstream. Any gateway local reply (wake failure,
+    # auth rejection, missing route) means the original request was
+    # answered by the filter instead of being forwarded, which fails the
+    # test regardless of whether a later request would have succeeded.
+    # (Gateway auth is disabled in this setup, so a 401 cannot come from
+    # the gateway filter here.)
+    body_start = resp.text.lstrip()[:120]
+    assert not any(body_start.startswith(marker) for marker in _GATEWAY_LOCAL_REPLY_BODIES), (
+        f"gateway answered the wake request locally instead of forwarding it "
+        f"upstream: status={resp.status_code} body={resp.text[:200]!r}"
     )
-    assert resp.status_code != 503, (
-        f"Gateway 503: sandbox {sandbox_id} wake failed or timed out"
+    assert resp.status_code != 401, (
+        f"envd rejected the access token: status=401 body={resp.text[:200]!r}"
     )
 
     # Step 7: Verify sandbox is Running (poll with retry for controller
