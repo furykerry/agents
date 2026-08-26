@@ -978,9 +978,15 @@ func TestDecodeHeadersWakeOnTrafficRouteNotEnabled(t *testing.T) {
 		WakeOnTraffic: false,
 	})
 
-	// No wake annotation in the cache, so the fallback also fails.
+	// No wake annotation in the cache, so the fallback also fails. The UID
+	// matches putTestRoute's default ("test-"+id) so the stale-route fence
+	// passes and the test exercises the annotation branch.
 	cacheProvider, _, err := cachetest.NewTestCache(t, &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "paused-sbx", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "paused-sbx",
+			Namespace: "default",
+			UID:       types.UID("test-default--paused-sbx"),
+		},
 	})
 	require.NoError(t, err)
 	wake.InitWaker(cacheProvider)
@@ -1253,11 +1259,14 @@ func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
 		WakeOnTraffic: false,
 	})
 
-	// Create sandbox with wake annotation in the informer cache
+	// Create sandbox with wake annotation in the informer cache. The UID
+	// matches putTestRoute's default ("test-"+id) so the stale-route fence
+	// passes.
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cache-fallback",
 			Namespace: "default",
+			UID:       types.UID("test-default--cache-fallback"),
 			Annotations: map[string]string{
 				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
 			},
@@ -1322,11 +1331,14 @@ func TestDecodeHeadersWakeOnTrafficCacheFallbackNoAnnotation(t *testing.T) {
 		WakeOnTraffic: false,
 	})
 
-	// Create sandbox WITHOUT wake annotation in the informer cache
+	// Create sandbox WITHOUT wake annotation in the informer cache. The UID
+	// matches putTestRoute's default ("test-"+id) so the stale-route fence
+	// passes and the test exercises the annotation branch.
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "no-annot-fallback",
 			Namespace: "default",
+			UID:       types.UID("test-default--no-annot-fallback"),
 		},
 	}
 	cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
@@ -1454,11 +1466,13 @@ func TestOnDestroyCancelsContext(t *testing.T) {
 func TestWakeAndContinueSuccess(t *testing.T) {
 	r := useTestRegistry(t)
 
-	// Add paused route to registry (wake-on-traffic enabled)
+	// Add paused route to registry (wake-on-traffic enabled). The explicit
+	// UID matches the sandbox below so the stale-route fence passes.
 	putTestRoute(t, r, "default--async-success", sandboxroute.Route{
 		IP:            "10.0.0.1",
 		Namespace:     "default",
 		Name:          "async-success",
+		UID:           types.UID("uid-async-success"),
 		State:         agentsv1alpha1.SandboxStatePaused,
 		WakeOnTraffic: true,
 	})
@@ -1574,12 +1588,21 @@ func TestWakeAndContinueSuccess(t *testing.T) {
 	assert.Equal(t, 1, mockCallbacks.clearRouteCalls)
 }
 
-// TestShouldWakeSandbox tests the pure branches of shouldWakeSandbox that
-// do not require a real cache provider.
+// TestShouldWakeSandbox tests the branches of shouldWakeSandbox that do not
+// require a real sandbox route registry.
 func TestShouldWakeSandbox(t *testing.T) {
-	// Initialize a waker backed by an empty cache; the cases below return
-	// before reaching HasWakeAnnotation.
-	cacheProvider, _, err := cachetest.NewTestCache(t)
+	// Initialize a waker backed by a cache holding the sandbox the valid
+	// routes below point at; the UID fence compares the route UID against
+	// this object.
+	sbxUID := types.UID("sbx-uid")
+	sbx := &agentsv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sbx",
+			Namespace: "default",
+			UID:       sbxUID,
+		},
+	}
+	cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
 	require.NoError(t, err)
 	wake.InitWaker(cacheProvider)
 	t.Cleanup(func() { wake.InitWaker(nil) })
@@ -1587,6 +1610,7 @@ func TestShouldWakeSandbox(t *testing.T) {
 	pausedRoute := sandboxroute.Route{
 		Namespace:     "default",
 		Name:          "sbx",
+		UID:           sbxUID,
 		State:         agentsv1alpha1.SandboxStatePaused,
 		WakeOnTraffic: true,
 	}
@@ -1641,6 +1665,48 @@ func TestShouldWakeSandbox(t *testing.T) {
 			waker:      waker,
 			want:       true,
 		},
+		{
+			// Sandbox A was deleted and recreated under the same name:
+			// the registry still holds A's route (UID, WakeOnTraffic),
+			// but the informer now holds B. The stale route must not
+			// wake B.
+			name: "stale route with mismatched UID returns false",
+			route: sandboxroute.Route{
+				Namespace:     "default",
+				Name:          "sbx",
+				UID:           types.UID("deleted-sandbox-uid"),
+				State:         agentsv1alpha1.SandboxStatePaused,
+				WakeOnTraffic: true,
+			},
+			enableWake: true,
+			waker:      waker,
+			want:       false,
+		},
+		{
+			name: "route pointing at absent sandbox returns false",
+			route: sandboxroute.Route{
+				Namespace:     "default",
+				Name:          "gone",
+				UID:           types.UID("gone-uid"),
+				State:         agentsv1alpha1.SandboxStatePaused,
+				WakeOnTraffic: true,
+			},
+			enableWake: true,
+			waker:      waker,
+			want:       false,
+		},
+		{
+			name: "route with empty UID returns false",
+			route: sandboxroute.Route{
+				Namespace:     "default",
+				Name:          "sbx",
+				State:         agentsv1alpha1.SandboxStatePaused,
+				WakeOnTraffic: true,
+			},
+			enableWake: true,
+			waker:      waker,
+			want:       false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1665,6 +1731,7 @@ func TestShouldWakeSandboxAnnotationFallback(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "with-annot",
 				Namespace: "default",
+				UID:       types.UID("with-annot-uid"),
 				Annotations: map[string]string{
 					agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
 				},
@@ -1679,6 +1746,7 @@ func TestShouldWakeSandboxAnnotationFallback(t *testing.T) {
 		route := sandboxroute.Route{
 			Namespace:     "default",
 			Name:          "with-annot",
+			UID:           types.UID("with-annot-uid"),
 			State:         agentsv1alpha1.SandboxStatePaused,
 			WakeOnTraffic: false, // Force annotation fallback
 		}
@@ -1691,6 +1759,7 @@ func TestShouldWakeSandboxAnnotationFallback(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "no-annot",
 				Namespace: "default",
+				UID:       types.UID("no-annot-uid"),
 			},
 		}
 		cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
@@ -1702,6 +1771,39 @@ func TestShouldWakeSandboxAnnotationFallback(t *testing.T) {
 		route := sandboxroute.Route{
 			Namespace:     "default",
 			Name:          "no-annot",
+			UID:           types.UID("no-annot-uid"),
+			State:         agentsv1alpha1.SandboxStatePaused,
+			WakeOnTraffic: false, // Force annotation fallback
+		}
+		f := &sandboxFilter{config: cfg}
+		assert.False(t, f.shouldWakeSandbox(route, wake.GetWaker()))
+	})
+
+	t.Run("annotation present but stale route UID returns false", func(t *testing.T) {
+		// The recreated sandbox B carries the wake annotation, but the
+		// route still references deleted sandbox A's UID. The UID fence
+		// must reject the wake even though the annotation check would
+		// pass.
+		sbx := &agentsv1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "recreated",
+				Namespace: "default",
+				UID:       types.UID("new-sandbox-uid"),
+				Annotations: map[string]string{
+					agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
+				},
+			},
+		}
+		cacheProvider, _, err := cachetest.NewTestCache(t, sbx)
+		require.NoError(t, err)
+
+		wake.InitWaker(cacheProvider)
+		t.Cleanup(func() { wake.InitWaker(nil) })
+
+		route := sandboxroute.Route{
+			Namespace:     "default",
+			Name:          "recreated",
+			UID:           types.UID("deleted-sandbox-uid"),
 			State:         agentsv1alpha1.SandboxStatePaused,
 			WakeOnTraffic: false, // Force annotation fallback
 		}

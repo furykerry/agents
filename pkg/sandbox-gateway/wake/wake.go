@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -62,6 +63,23 @@ func InitWaker(cacheProvider cache.Provider) {
 // been called yet.
 func GetWaker() *Waker {
 	return defaultWaker.Load()
+}
+
+// SandboxUIDMatches reports whether the informer cache holds a sandbox at
+// namespace/name whose UID equals uid. It returns false when uid is empty,
+// the waker is nil, or the object cannot be read: a registry route pointing
+// at a deleted object must never trigger a wake, and a recreated same-name
+// sandbox carries a different UID.
+func (w *Waker) SandboxUIDMatches(ctx context.Context, namespace, name string, uid types.UID) bool {
+	if w == nil || uid == "" {
+		return false
+	}
+	cli := w.cache.GetClient()
+	var sbx agentsv1alpha1.Sandbox
+	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
+		return false
+	}
+	return sbx.UID == uid
 }
 
 // HasWakeAnnotation checks the informer cache for the wake-on-traffic annotation.

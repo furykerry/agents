@@ -292,7 +292,8 @@ func (f *sandboxFilter) verifierUnavailable(sandboxID string) api.StatusType {
 // shouldWakeSandbox determines whether a non-Running sandbox should be woken
 // by traffic. Returns true only when wake-on-traffic is enabled, the sandbox
 // is Paused, the waker is initialized, the route carries a full ObjectKey,
-// and either the route registry already has WakeOnTraffic set or the
+// the informer still holds a sandbox with the route's UID (stale-route
+// fence), and either the route registry already has WakeOnTraffic set or the
 // annotation fallback check succeeds.
 func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.Waker) bool {
 	if route.State != agentsv1alpha1.SandboxStatePaused {
@@ -306,6 +307,19 @@ func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.
 	}
 	key, ok := route.ObjectKey()
 	if !ok {
+		return false
+	}
+	// UID fence: the route registry can lag behind deletions, so the route
+	// may reference a sandbox that was deleted and recreated under the same
+	// name. The request was authenticated against the route's identity, so a
+	// stale route must neither wake the new object nor inherit its wake
+	// configuration. Verify the informer still holds the exact object.
+	if !waker.SandboxUIDMatches(context.Background(), key.Namespace, key.Name, route.UID) {
+		logger.Warn("Stale wake route: sandbox UID mismatch or object gone",
+			zap.String("sandboxID", route.ID),
+			zap.String("namespace", key.Namespace),
+			zap.String("name", key.Name),
+			zap.String("routeUID", string(route.UID)))
 		return false
 	}
 	// route.WakeOnTraffic is the primary check (fast, from registry).
