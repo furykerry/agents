@@ -1036,6 +1036,27 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			},
 		},
 		{
+			// A recycled CR can still carry the wake timeout of delivery A;
+			// delivery B's request decides the policy, so the stale value is
+			// replaced by the current request timeout.
+			name: "autoResume enabled overwrites stale inherited wake timeout",
+			request: models.NewSandboxRequest{
+				TemplateID: "t1",
+				Timeout:    300,
+				AutoPause:  true,
+				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
+			},
+			initialAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "999",
+			},
+			maxTimeout: 3600,
+			expectAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "300",
+			},
+		},
+		{
 			// Shutdown-only lifecycle: the wake timeout only feeds the
 			// fresh PauseTime of auto-pause sandboxes, so the annotation
 			// would be misleading metadata.
@@ -1045,6 +1066,9 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 				Timeout:    300,
 				AutoPause:  false,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
+			},
+			initialAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "999",
 			},
 			maxTimeout: 3600,
 			expectAnnotations: map[string]string{
@@ -1061,6 +1085,27 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			},
 			maxTimeout:          3600,
 			expectNoAnnotations: []string{agentsv1alpha1.AnnotationWakeOnTraffic},
+		},
+		{
+			// Delivery A enabled autoResume; the CR was recycled and
+			// claimed by delivery B without autoResume. Both inherited
+			// wake annotations must be dropped so B cannot be woken by
+			// traffic.
+			name: "autoResume disabled clears inherited wake annotations",
+			request: models.NewSandboxRequest{
+				TemplateID: "t1",
+				Timeout:    300,
+				AutoResume: models.SandboxAutoResumeConfig{Enabled: false},
+			},
+			initialAnnotations: map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "300",
+			},
+			maxTimeout: 3600,
+			expectNoAnnotations: []string{
+				agentsv1alpha1.AnnotationWakeOnTraffic,
+				agentsv1alpha1.AnnotationWakeTimeoutSeconds,
+			},
 		},
 		{
 			name: "autoResume absent does not set wake-on-traffic annotation",
