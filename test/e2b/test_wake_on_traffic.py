@@ -38,8 +38,8 @@ def _gateway_health_check():
         return False
 
 
-def _get_sandbox_annotations(sbx: Sandbox) -> dict:
-    """Fetch the annotations of a Sandbox CR via kubectl.
+def _get_sandbox_cr(sbx: Sandbox) -> dict:
+    """Fetch a Sandbox CR via kubectl.
 
     The E2B sandbox ID is not necessarily the CR name: sandboxes claimed
     from a pre-warmed pool keep their original name and carry the ID in the
@@ -54,8 +54,41 @@ def _get_sandbox_annotations(sbx: Sandbox) -> dict:
         text=True,
         check=True,
     )
-    cr = json.loads(result.stdout)
-    return cr.get("metadata", {}).get("annotations", {})
+    return json.loads(result.stdout)
+
+
+def _get_sandbox_annotations(sbx: Sandbox) -> dict:
+    """Fetch the annotations of a Sandbox CR via kubectl."""
+    return _get_sandbox_cr(sbx).get("metadata", {}).get("annotations", {})
+
+
+def _wait_sandbox_fully_paused(sbx: Sandbox, budget_sec: int = 120):
+    """Wait until the CR has fully completed the pause transition.
+
+    get_info() reports paused as soon as spec.paused is set, while
+    status.phase may still be Running. Resume rejects that intermediate
+    state ("sandbox is not resumable, reason: SandboxIsPausing"), so the
+    single wake request may only be sent after the controller has finished
+    pausing: status.phase == Paused and the SandboxPaused condition is
+    True. Polling is allowed here because this is pre-wake synchronization,
+    not the wake request itself.
+    """
+    deadline = time.time() + budget_sec
+    while time.time() < deadline:
+        cr = _get_sandbox_cr(sbx)
+        phase = cr.get("status", {}).get("phase")
+        conditions = cr.get("status", {}).get("conditions", [])
+        paused_cond = next(
+            (c for c in conditions if c.get("type") == "SandboxPaused"), None
+        )
+        if phase == "Paused" and paused_cond and paused_cond.get("status") == "True":
+            print(f"sandbox fully paused: phase={phase}")
+            return
+        print(f"waiting for pause transition to complete, phase={phase}")
+        time.sleep(2)
+    raise AssertionError(
+        f"sandbox {sbx.sandbox_id} did not finish pausing within {budget_sec}s"
+    )
 
 
 # Response bodies of every local reply the gateway filter can send instead of
@@ -138,6 +171,14 @@ def test_wake_on_traffic(sandbox_context):
             break
         time.sleep(2)
     assert paused, f"sandbox {sandbox_id} did not auto-pause within deadline"
+
+    # Step 3.5: Wait for the pause transition to fully complete. get_info()
+    # flips to PAUSED as soon as spec.paused is set (phase may still be
+    # Running); a wake request in that window is rejected with
+    # SandboxIsPausing. Since step 5 sends exactly one request, it must only
+    # go out after status.phase is Paused and the SandboxPaused condition
+    # is True.
+    _wait_sandbox_fully_paused(sbx)
 
     # Step 4: Verify gateway connectivity before sending wake traffic.
     assert _gateway_health_check(), (
