@@ -131,18 +131,17 @@ probe-driven policy:
 
 ## Read Helpers
 
-One helper pair in `api/v1alpha1` owns the spec reads so the gateway, the
-manager and the route projection cannot drift (precedent: the checkpoint
-helpers in `api/v1alpha1/checkpoint_types.go`):
+One helper pair in `pkg/utils` owns the spec reads so the gateway, the
+controller and the route projection cannot drift:
 
 ```go
 // WakeOnIngressTrafficEnabled reports whether the sandbox opted into
 // wake-on-traffic via its spec.
-func WakeOnIngressTrafficEnabled(sbx *Sandbox) bool
+func WakeOnIngressTrafficEnabled(sbx *agentsv1alpha1.Sandbox) bool
 
 // WakeOnIngressTrafficPauseTimeout returns the auto-pause timeout to re-arm
 // after a traffic wake, or 0 when the rule does not set a positive value.
-func WakeOnIngressTrafficPauseTimeout(sbx *Sandbox) time.Duration
+func WakeOnIngressTrafficPauseTimeout(sbx *agentsv1alpha1.Sandbox) time.Duration
 ```
 
 Out-of-band enablement uses a direct spec patch:
@@ -160,7 +159,7 @@ kubectl patch sandbox my-sbx --type=merge -p \
 registry and by the manager's `syncRoute`. It switches to the helper:
 
 ```go
-WakeOnTraffic: agentsv1alpha1.WakeOnIngressTrafficEnabled(sandbox),
+WakeOnTraffic: utils.WakeOnIngressTrafficEnabled(sandbox),
 ```
 
 `Route.WakeOnTraffic` keeps its field name and JSON tag: gateways exchange
@@ -247,11 +246,11 @@ The E2B surface does not change: `autoResume: {"enabled": true}` (Python SDK
 ### sandbox-gateway read path
 
 - The `wake.Waker` enable check becomes `wake.Waker.WakeEnabled`, delegating
-  to `agentsv1alpha1.WakeOnIngressTrafficEnabled`. It stays the informer-cache
+  to `utils.WakeOnIngressTrafficEnabled`. It stays the informer-cache
   fallback that covers the window between a spec patch and the gateway
   controller reconciling the change into the route registry.
 - `wake.Waker.wakeInternal` resolves the re-armed timeout through
-  `agentsv1alpha1.WakeOnIngressTrafficPauseTimeout`, falling back to the
+  `utils.WakeOnIngressTrafficPauseTimeout`, falling back to the
   `defaultWakeTimeout` passed by the filter. The auto-pause/never-timeout/
   shutdown-only branching and the resume timeout floor are unchanged.
 - `filter.shouldWakeSandbox` is unchanged apart from the renamed fallback call;
@@ -326,7 +325,8 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 
 | Area | File | Change |
 |------|------|--------|
-| API types | `api/v1alpha1/sandbox_types.go` | Add `ResumePolicy.WhenIngressTraffic` + `IngressTrafficRule`; add the two spec-read helpers |
+| API types | `api/v1alpha1/sandbox_types.go` | Add `ResumePolicy.WhenIngressTraffic` + `IngressTrafficRule` |
+| Read helpers | `pkg/utils/utils.go` | Add the two spec-read helpers shared by gateway, controller and route projection |
 | Generated output | `client/`, `config/crd/` | `make generate manifests` (never edited by hand) |
 | Route projection | `pkg/sandboxroute/route.go` | `WakeOnTraffic` derived from the helper |
 | Recycle | `pkg/controller/sandbox/core/recycle.go` | Clear the rule in `resetMetadataForPool` and prune empty parents |

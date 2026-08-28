@@ -51,6 +51,7 @@ import (
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/csiutils"
 )
 
@@ -1169,8 +1170,8 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 				assert.Equal(t, v, got, "label %q value mismatch", k)
 			}
 
-			assert.Equal(t, tt.expectWakeRule, agentsv1alpha1.WakeOnIngressTrafficEnabled(mockSbx.Sandbox))
-			assert.Equal(t, tt.expectWakePauseTimeout, agentsv1alpha1.WakeOnIngressTrafficPauseTimeout(mockSbx.Sandbox))
+			assert.Equal(t, tt.expectWakeRule, utils.WakeOnIngressTrafficEnabled(mockSbx.Sandbox))
+			assert.Equal(t, tt.expectWakePauseTimeout, utils.WakeOnIngressTrafficPauseTimeout(mockSbx.Sandbox))
 		})
 	}
 }

@@ -1362,7 +1362,7 @@ func TestResetForPool(t *testing.T) {
 			// the pool: the next claim may serve a delivery that never
 			// enabled autoResume. Probe-driven rules are template/operator
 			// declared and survive; empty parents are pruned.
-			assert.False(t, agentsv1alpha1.WakeOnIngressTrafficEnabled(updated))
+			assert.False(t, utils.WakeOnIngressTrafficEnabled(updated))
 			if tt.expectAutoPausePolicy != nil {
 				assert.Equal(t, tt.expectAutoPausePolicy, updated.Spec.AutoPausePolicy)
 			} else {

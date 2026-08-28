@@ -114,7 +114,7 @@ func RouteFromSandbox(sandbox *agentsv1alpha1.Sandbox) (Route, error) {
 		ResourceVersion:    sandbox.ResourceVersion,
 		AccessToken:        utils.GetAccessToken(sandbox),
 		RequireTrafficAuth: identity.IsAccessTokenRequested(sandbox),
-		WakeOnTraffic:      agentsv1alpha1.WakeOnIngressTrafficEnabled(sandbox),
+		WakeOnTraffic:      utils.WakeOnIngressTrafficEnabled(sandbox),
 	}
 	if err := route.validate(); err != nil {
 		return Route{}, err

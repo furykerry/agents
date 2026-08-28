@@ -34,6 +34,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
@@ -94,7 +95,7 @@ func (w *Waker) WakeEnabled(ctx context.Context, namespace, name string) bool {
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
 		return false
 	}
-	return agentsv1alpha1.WakeOnIngressTrafficEnabled(&sbx)
+	return utils.WakeOnIngressTrafficEnabled(&sbx)
 }
 
 // Wake resumes a paused sandbox by delegating to sandboxcr.Sandbox.Resume().
@@ -130,7 +131,7 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 	// Determine wake timeout: prefer the spec rule, fall back to the
 	// filter default.
 	wakeTimeout := defaultWakeTimeout
-	if specTimeout := agentsv1alpha1.WakeOnIngressTrafficPauseTimeout(&sbx); specTimeout > 0 {
+	if specTimeout := utils.WakeOnIngressTrafficPauseTimeout(&sbx); specTimeout > 0 {
 		wakeTimeout = specTimeout
 	}
 

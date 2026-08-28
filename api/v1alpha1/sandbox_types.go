@@ -17,8 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"time"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -364,27 +362,6 @@ type IngressTrafficRule struct {
 	// configuration (default 60s) is used.
 	// +optional
 	PauseTimeout *metav1.Duration `json:"pauseTimeout,omitempty"`
-}
-
-// WakeOnIngressTrafficEnabled reports whether the sandbox opted into
-// wake-on-traffic via its spec.
-func WakeOnIngressTrafficEnabled(sbx *Sandbox) bool {
-	return sbx != nil && sbx.Spec.AutoPausePolicy != nil &&
-		sbx.Spec.AutoPausePolicy.Resume != nil &&
-		sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic != nil
-}
-
-// WakeOnIngressTrafficPauseTimeout returns the auto-pause timeout to re-arm
-// after a traffic wake, or 0 when the rule does not set a positive value.
-func WakeOnIngressTrafficPauseTimeout(sbx *Sandbox) time.Duration {
-	if sbx == nil || sbx.Spec.AutoPausePolicy == nil || sbx.Spec.AutoPausePolicy.Resume == nil {
-		return 0
-	}
-	rule := sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic
-	if rule == nil || rule.PauseTimeout == nil || rule.PauseTimeout.Duration <= 0 {
-		return 0
-	}
-	return rule.PauseTimeout.Duration
 }
 
 // Schedule tracks the upcoming pause/resume timing for the auto-pause controller.
