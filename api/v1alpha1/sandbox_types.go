@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"time"
+
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -270,12 +272,20 @@ type PausePolicy struct {
 	WhenProbedIdleState *ProbedIdleStateRule `json:"whenProbedIdleState,omitempty"`
 }
 
-// ResumePolicy defines when to resume the sandbox based on probe results.
+// ResumePolicy defines when to resume the sandbox.
 type ResumePolicy struct {
 	// WhenProbedScheduleTime resumes the sandbox before a scheduled task
 	// by parsing the probe's Condition message as a timestamp.
 	// +optional
 	WhenProbedScheduleTime *ProbedScheduleTimeRule `json:"whenProbedScheduleTime,omitempty"`
+
+	// WhenIngressTraffic resumes the sandbox when the sandbox-gateway receives
+	// inbound traffic addressed to it while it is paused. Unlike the probed
+	// rules this one is event-driven: it needs no probe, it produces no
+	// Status.Schedules entry, and it is executed by the sandbox-gateway rather
+	// than by the sandbox controller.
+	// +optional
+	WhenIngressTraffic *IngressTrafficRule `json:"whenIngressTraffic,omitempty"`
 }
 
 // ProbedIdleStateRule defines the rule for pausing when a probe reports
@@ -337,6 +347,44 @@ type ProbedScheduleTimeRule struct {
 	// +optional
 	// +kubebuilder:default="5m"
 	LeadTime *metav1.Duration `json:"leadTime,omitempty"`
+}
+
+// IngressTrafficRule defines the rule for resuming a paused sandbox when
+// ingress traffic reaches the sandbox-gateway. A non-nil rule enables
+// wake-on-traffic; there is no separate enable flag, matching the sibling
+// rules where nil means "not configured".
+type IngressTrafficRule struct {
+	// PauseTimeout is the auto-pause timeout re-armed by a traffic wake: the
+	// gateway writes Spec.PauseTime = now + PauseTimeout atomically with
+	// Spec.Paused = false, so the woken sandbox has running time before its
+	// next auto-pause. It applies only to auto-pause sandboxes (those that
+	// already carry Spec.PauseTime); never-timeout and shutdown-only
+	// sandboxes keep their timeout mode unchanged.
+	// When absent or non-positive, the gateway's wake-timeout-seconds
+	// configuration (default 60s) is used.
+	// +optional
+	PauseTimeout *metav1.Duration `json:"pauseTimeout,omitempty"`
+}
+
+// WakeOnIngressTrafficEnabled reports whether the sandbox opted into
+// wake-on-traffic via its spec.
+func WakeOnIngressTrafficEnabled(sbx *Sandbox) bool {
+	return sbx != nil && sbx.Spec.AutoPausePolicy != nil &&
+		sbx.Spec.AutoPausePolicy.Resume != nil &&
+		sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic != nil
+}
+
+// WakeOnIngressTrafficPauseTimeout returns the auto-pause timeout to re-arm
+// after a traffic wake, or 0 when the rule does not set a positive value.
+func WakeOnIngressTrafficPauseTimeout(sbx *Sandbox) time.Duration {
+	if sbx == nil || sbx.Spec.AutoPausePolicy == nil || sbx.Spec.AutoPausePolicy.Resume == nil {
+		return 0
+	}
+	rule := sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic
+	if rule == nil || rule.PauseTimeout == nil || rule.PauseTimeout.Duration <= 0 {
+		return 0
+	}
+	return rule.PauseTimeout.Duration
 }
 
 // Schedule tracks the upcoming pause/resume timing for the auto-pause controller.
