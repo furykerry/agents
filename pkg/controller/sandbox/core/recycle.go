@@ -407,6 +407,19 @@ func (r *SandboxRecycleControl) resetMetadataForPool(ctx context.Context, box *a
 	// Part 1: Reset fixed claim metadata
 	box.Spec.ShutdownTime = nil
 	box.Spec.PauseTime = nil
+	// Wake configuration is per-tenant: a recycled pool CR must not inherit
+	// it. The probe-driven rules are declared by the SandboxSet template or
+	// an operator, not by a claim, so they stay. Empty parents are pruned
+	// to keep the pooled spec byte-identical to a fresh one.
+	if p := box.Spec.AutoPausePolicy; p != nil && p.Resume != nil {
+		p.Resume.WhenIngressTraffic = nil
+		if p.Resume.WhenProbedScheduleTime == nil {
+			p.Resume = nil
+		}
+		if p.Pause == nil && p.Resume == nil {
+			box.Spec.AutoPausePolicy = nil
+		}
+	}
 	box.OwnerReferences = []metav1.OwnerReference{
 		*metav1.NewControllerRef(sbs, agentsv1alpha1.SandboxSetControllerKind),
 	}

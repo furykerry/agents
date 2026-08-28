@@ -1121,12 +1121,13 @@ func TestEnsureSandboxRecycled(t *testing.T) {
 func TestResetForPool(t *testing.T) {
 	now := metav1.Now()
 	tests := []struct {
-		name              string
-		box               *agentsv1alpha1.Sandbox
-		sbs               *agentsv1alpha1.SandboxSet
-		expectError       string
-		expectLabels      map[string]string
-		expectAnnotations map[string]string
+		name                  string
+		box                   *agentsv1alpha1.Sandbox
+		sbs                   *agentsv1alpha1.SandboxSet
+		expectError           string
+		expectLabels          map[string]string
+		expectAnnotations     map[string]string
+		expectAutoPausePolicy *agentsv1alpha1.AutoPausePolicy
 	}{
 		{
 			name: "no updated metadata - clears spec times, restores ownerRef, removes recycle annotation",
@@ -1182,9 +1183,7 @@ func TestResetForPool(t *testing.T) {
 						agentsv1alpha1.AnnotationEnvdURL:                "http://legacy-envd.example.com",
 						agentsv1alpha1.AnnotationRuntimeURL:             "http://runtime.example.com",
 						agentsv1alpha1.AnnotationSecurityRules:          `[{"name":"leaked","match":[{"domains":["api.example.com"]}],"actions":{"block":{"statusCode":403}}}]`,
-						agentsv1alpha1.AnnotationWakeOnTraffic:          "true",
-						agentsv1alpha1.AnnotationWakeTimeoutSeconds:     "300",
-						"user-anno": "user-value",
+						"user-anno":                                     "user-value",
 						agentsv1alpha1.AnnotationUpdatedMetadataInClaim: mustMarshal(agentsv1alpha1.UpdatedMetadataInClaim{
 							Labels:      []string{"user-label"},
 							Annotations: []string{"user-anno"},
@@ -1194,6 +1193,13 @@ func TestResetForPool(t *testing.T) {
 				Spec: agentsv1alpha1.SandboxSpec{
 					ShutdownTime: &now,
 					PauseTime:    &now,
+					AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
+						Resume: &agentsv1alpha1.ResumePolicy{
+							WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
+								PauseTimeout: &metav1.Duration{Duration: 300 * time.Second},
+							},
+						},
+					},
 				},
 			},
 			sbs: &agentsv1alpha1.SandboxSet{
@@ -1207,6 +1213,48 @@ func TestResetForPool(t *testing.T) {
 			expectLabels: map[string]string{
 				agentsv1alpha1.LabelSandboxPool:      "test-pool",
 				agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.False,
+			},
+		},
+		{
+			name: "wake rule combined with probed rule - clears wake rule, keeps probed rule",
+			box: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentsv1alpha1.LabelSandboxPool: "test-pool",
+					},
+					Annotations: map[string]string{
+						agentsv1alpha1.AnnotationCleanup: "true",
+					},
+				},
+				Spec: agentsv1alpha1.SandboxSpec{
+					ShutdownTime: &now,
+					PauseTime:    &now,
+					AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
+						Resume: &agentsv1alpha1.ResumePolicy{
+							WhenProbedScheduleTime: &agentsv1alpha1.ProbedScheduleTimeRule{},
+							WhenIngressTraffic:     &agentsv1alpha1.IngressTrafficRule{},
+						},
+					},
+				},
+			},
+			sbs: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pool",
+					Namespace: "default",
+					UID:       types.UID("test-uid"),
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{Replicas: 1},
+			},
+			expectLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxPool:      "test-pool",
+				agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.False,
+			},
+			expectAutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
+				Resume: &agentsv1alpha1.ResumePolicy{
+					WhenProbedScheduleTime: &agentsv1alpha1.ProbedScheduleTimeRule{},
+				},
 			},
 		},
 		{
@@ -1310,11 +1358,16 @@ func TestResetForPool(t *testing.T) {
 			// pool: a leaked chain would apply that tenant's rules (and any
 			// injected credentials) to the next claimant.
 			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationSecurityRules])
-			// Wake annotations of the previous delivery must not leak into
+			// The wake rule of the previous delivery must not leak into
 			// the pool: the next claim may serve a delivery that never
-			// enabled autoResume.
-			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationWakeOnTraffic])
-			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds])
+			// enabled autoResume. Probe-driven rules are template/operator
+			// declared and survive; empty parents are pruned.
+			assert.False(t, agentsv1alpha1.WakeOnIngressTrafficEnabled(updated))
+			if tt.expectAutoPausePolicy != nil {
+				assert.Equal(t, tt.expectAutoPausePolicy, updated.Spec.AutoPausePolicy)
+			} else {
+				assert.Nil(t, updated.Spec.AutoPausePolicy)
+			}
 			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationUpdatedMetadataInClaim])
 			if tt.expectLabels != nil {
 				assert.Equal(t, tt.expectLabels, updated.Labels)

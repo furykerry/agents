@@ -47,8 +47,6 @@ var AnnotationsClearedOnRecycle = []string{
 	// (header injections, blocks); leaking it across a claim would apply one
 	// tenant's rules — potentially carrying credentials — to another.
 	AnnotationSecurityRules,
-	AnnotationWakeOnTraffic,
-	AnnotationWakeTimeoutSeconds,
 }
 
 // InternalKeysPreservedOnCreation lists internal keys (with the InternalPrefix)

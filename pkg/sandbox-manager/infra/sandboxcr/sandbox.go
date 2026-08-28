@@ -378,6 +378,39 @@ func (s *Sandbox) SetTimeout(opts timeout.Options) {
 	setTimeout(s.Sandbox, opts)
 }
 
+// SetWakeOnIngressTraffic enables or clears the wake-on-ingress-traffic resume
+// rule. A non-positive pauseTimeout leaves the re-armed timeout unset, so the
+// gateway default applies. Clearing prunes the now-empty parents so a pooled
+// spec stays byte-identical to a fresh one.
+func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Duration) {
+	policy := s.Sandbox.Spec.AutoPausePolicy
+	if !enabled {
+		if policy == nil || policy.Resume == nil {
+			return
+		}
+		policy.Resume.WhenIngressTraffic = nil
+		if policy.Resume.WhenProbedScheduleTime == nil {
+			policy.Resume = nil
+		}
+		if policy.Pause == nil && policy.Resume == nil {
+			s.Sandbox.Spec.AutoPausePolicy = nil
+		}
+		return
+	}
+	if policy == nil {
+		policy = &agentsv1alpha1.AutoPausePolicy{}
+		s.Sandbox.Spec.AutoPausePolicy = policy
+	}
+	if policy.Resume == nil {
+		policy.Resume = &agentsv1alpha1.ResumePolicy{}
+	}
+	rule := &agentsv1alpha1.IngressTrafficRule{}
+	if pauseTimeout > 0 {
+		rule.PauseTimeout = &metav1.Duration{Duration: pauseTimeout}
+	}
+	policy.Resume.WhenIngressTraffic = rule
+}
+
 func (s *Sandbox) GetPodLabels() map[string]string {
 	if s.Spec.Template != nil {
 		return s.Spec.Template.Labels

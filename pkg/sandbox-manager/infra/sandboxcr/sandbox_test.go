@@ -1192,6 +1192,87 @@ func getTimeFromMetaTime(t *metav1.Time) time.Time {
 	return t.Time
 }
 
+func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
+	wakeRule := func(timeout time.Duration) *v1alpha1.IngressTrafficRule {
+		rule := &v1alpha1.IngressTrafficRule{}
+		if timeout > 0 {
+			rule.PauseTimeout = &metav1.Duration{Duration: timeout}
+		}
+		return rule
+	}
+	tests := []struct {
+		name         string
+		initial      *v1alpha1.AutoPausePolicy
+		enabled      bool
+		pauseTimeout time.Duration
+		expectPolicy *v1alpha1.AutoPausePolicy
+	}{
+		{
+			name:         "enable with timeout on empty spec",
+			enabled:      true,
+			pauseTimeout: 10 * time.Minute,
+			expectPolicy: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(10 * time.Minute)},
+			},
+		},
+		{
+			name:    "enable without timeout",
+			enabled: true,
+			expectPolicy: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(0)},
+			},
+		},
+		{
+			name:         "disable on empty spec is a no-op",
+			enabled:      false,
+			expectPolicy: nil,
+		},
+		{
+			name: "disable clears wake rule and prunes empty parents",
+			initial: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(10 * time.Minute)},
+			},
+			enabled:      false,
+			expectPolicy: nil,
+		},
+		{
+			name: "disable keeps probed resume rule",
+			initial: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{
+					WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{},
+					WhenIngressTraffic:     wakeRule(10 * time.Minute),
+				},
+			},
+			enabled: false,
+			expectPolicy: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{}},
+			},
+		},
+		{
+			name: "disable keeps pause policy",
+			initial: &v1alpha1.AutoPausePolicy{
+				Pause:  &v1alpha1.PausePolicy{},
+				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(0)},
+			},
+			enabled: false,
+			expectPolicy: &v1alpha1.AutoPausePolicy{
+				Pause: &v1alpha1.PausePolicy{},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
+			}}
+
+			s.SetWakeOnIngressTraffic(tt.enabled, tt.pauseTimeout)
+
+			assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
+		})
+	}
+}
+
 func TestSandbox_GetClaimTime(t *testing.T) {
 	now := time.Now()
 	claimTimeString := now.Format(time.RFC3339)

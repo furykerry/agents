@@ -336,10 +336,10 @@ func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.
 	if route.WakeOnTraffic {
 		return true
 	}
-	// HasWakeAnnotation is a fallback that reads the informer cache
-	// directly, covering the window between kubectl annotate and the
-	// gateway controller reconciling the change into the route registry.
-	return waker.HasWakeAnnotation(context.Background(), key.Namespace, key.Name)
+	// WakeEnabled is a fallback that reads the informer cache directly,
+	// covering the window between a spec patch and the gateway controller
+	// reconciling the change into the route registry.
+	return waker.WakeEnabled(context.Background(), key.Namespace, key.Name)
 }
 
 // wakeAndContinue runs the wake operation asynchronously. On success it sets

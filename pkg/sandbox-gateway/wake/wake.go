@@ -19,7 +19,6 @@ package wake
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -82,11 +81,11 @@ func (w *Waker) SandboxUIDMatches(ctx context.Context, namespace, name string, u
 	return sbx.UID == uid
 }
 
-// HasWakeAnnotation checks the informer cache for the wake-on-traffic annotation.
-// This is a fallback for when the gateway controller's route registry hasn't
-// yet synced the annotation change. Returns false if the waker is nil or the
-// sandbox cannot be read from cache.
-func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) bool {
+// WakeEnabled checks the informer cache for the wake-on-ingress-traffic
+// resume rule on the sandbox spec. This is a fallback for when the gateway
+// controller's route registry hasn't yet synced the spec change. Returns
+// false if the waker is nil or the sandbox cannot be read from cache.
+func (w *Waker) WakeEnabled(ctx context.Context, namespace, name string) bool {
 	if w == nil {
 		return false
 	}
@@ -95,7 +94,7 @@ func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) b
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
 		return false
 	}
-	return sbx.GetAnnotations()[agentsv1alpha1.AnnotationWakeOnTraffic] == agentsv1alpha1.True
+	return agentsv1alpha1.WakeOnIngressTrafficEnabled(&sbx)
 }
 
 // Wake resumes a paused sandbox by delegating to sandboxcr.Sandbox.Resume().
@@ -106,7 +105,8 @@ func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) b
 // The caller derives the wake deadline itself (the filter wraps a detached
 // context with Config.GetWakeTimeoutSeconds()); Wake does not wrap ctx
 // again. defaultWakeTimeout is only the fallback timeout used when the
-// sandbox carries no wake-timeout-seconds annotation, and must be positive.
+// sandbox's IngressTrafficRule carries no positive PauseTimeout, and must be
+// positive.
 func (w *Waker) Wake(ctx context.Context, namespace, name string, defaultWakeTimeout time.Duration) error {
 	if defaultWakeTimeout <= 0 {
 		return fmt.Errorf("wake default timeout must be positive, got %v", defaultWakeTimeout)
@@ -114,25 +114,24 @@ func (w *Waker) Wake(ctx context.Context, namespace, name string, defaultWakeTim
 	return w.wakeInternal(ctx, namespace, name, defaultWakeTimeout)
 }
 
-// wakeInternal performs the actual wake work: reads annotations from cache,
+// wakeInternal performs the actual wake work: reads the sandbox from cache,
 // calls sandbox.Resume, and syncs the route.
 func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaultWakeTimeout time.Duration) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KRef(namespace, name))
 
 	cli := w.cache.GetClient()
 
-	// Read sandbox from informer cache (fast) to get annotations.
+	// Read sandbox from informer cache (fast) to resolve the wake rule.
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
 		return err
 	}
 
-	// Determine wake timeout: prefer annotation, fall back to filter default.
+	// Determine wake timeout: prefer the spec rule, fall back to the
+	// filter default.
 	wakeTimeout := defaultWakeTimeout
-	if timeoutStr := sbx.Annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds]; timeoutStr != "" {
-		if secs, err := strconv.Atoi(timeoutStr); err == nil && secs > 0 {
-			wakeTimeout = time.Duration(secs) * time.Second
-		}
+	if specTimeout := agentsv1alpha1.WakeOnIngressTrafficPauseTimeout(&sbx); specTimeout > 0 {
+		wakeTimeout = specTimeout
 	}
 
 	// Reuse the existing sandbox-manager connect Resume implementation.

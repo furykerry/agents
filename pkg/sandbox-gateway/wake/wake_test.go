@@ -49,41 +49,28 @@ func TestInitWakerAndGetWaker(t *testing.T) {
 	}
 }
 
-func TestHasWakeAnnotation(t *testing.T) {
+func TestWakeEnabled(t *testing.T) {
 	tests := []struct {
 		name        string
 		sandboxName string
 		sandboxNS   string
-		annotations map[string]string
+		withRule    bool
 		createSbx   bool
 		wakerNil    bool
 		want        bool
 	}{
 		{
-			name:        "annotation present true",
+			name:        "rule present",
 			sandboxName: "sbx-wake",
 			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
-			},
-			createSbx: true,
-			want:      true,
+			withRule:    true,
+			createSbx:   true,
+			want:        true,
 		},
 		{
-			name:        "annotation present false",
+			name:        "rule absent",
 			sandboxName: "sbx-no-wake",
 			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: "false",
-			},
-			createSbx: true,
-			want:      false,
-		},
-		{
-			name:        "annotation absent",
-			sandboxName: "sbx-no-annot",
-			sandboxNS:   "default",
-			annotations: nil,
 			createSbx:   true,
 			want:        false,
 		},
@@ -105,7 +92,7 @@ func TestHasWakeAnnotation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.wakerNil {
 				var nilWaker *Waker
-				assert.False(t, nilWaker.HasWakeAnnotation(context.Background(), "default", "sbx"))
+				assert.False(t, nilWaker.WakeEnabled(context.Background(), "default", "sbx"))
 				return
 			}
 
@@ -113,10 +100,16 @@ func TestHasWakeAnnotation(t *testing.T) {
 			if tt.createSbx {
 				sbx := &agentsv1alpha1.Sandbox{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:        tt.sandboxName,
-						Namespace:   tt.sandboxNS,
-						Annotations: tt.annotations,
+						Name:      tt.sandboxName,
+						Namespace: tt.sandboxNS,
 					},
+				}
+				if tt.withRule {
+					sbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+						Resume: &agentsv1alpha1.ResumePolicy{
+							WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+						},
+					}
 				}
 				initObjs = append(initObjs, sbx)
 			}
@@ -125,20 +118,19 @@ func TestHasWakeAnnotation(t *testing.T) {
 			require.NoError(t, err)
 
 			waker := &Waker{cache: cacheProvider}
-			got := waker.HasWakeAnnotation(context.Background(), tt.sandboxNS, tt.sandboxName)
+			got := waker.WakeEnabled(context.Background(), tt.sandboxNS, tt.sandboxName)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 // newPausedSandbox creates a Sandbox CR in Paused state with Paused condition True.
-func newPausedSandbox(name, namespace string, annotations map[string]string, shutdownTime *metav1.Time) *agentsv1alpha1.Sandbox {
+func newPausedSandbox(name, namespace string, shutdownTime *metav1.Time) *agentsv1alpha1.Sandbox {
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			UID:         types.UID("uid-" + name),
-			Annotations: annotations,
+			Name:      name,
+			Namespace: namespace,
+			UID:       types.UID("uid-" + name),
 			Labels: map[string]string{
 				agentsv1alpha1.LabelSandboxIsClaimed: "true",
 			},
@@ -171,7 +163,7 @@ func TestWake(t *testing.T) {
 		name           string
 		sandboxName    string
 		sandboxNS      string
-		annotations    map[string]string
+		wakeRule       *agentsv1alpha1.IngressTrafficRule
 		shutdownTime   *metav1.Time
 		pauseTime      *metav1.Time
 		defaultTimeout time.Duration
@@ -197,7 +189,6 @@ func TestWake(t *testing.T) {
 			name:           "non-positive default timeout rejected",
 			sandboxName:    "sbx-zero-timeout",
 			sandboxNS:      "default",
-			annotations:    map[string]string{},
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
 			defaultTimeout: 0,
@@ -207,7 +198,6 @@ func TestWake(t *testing.T) {
 			name:           "successful wake with default timeout",
 			sandboxName:    "sbx-default",
 			sandboxNS:      "default",
-			annotations:    map[string]string{},
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
 			defaultTimeout: 60 * time.Second,
@@ -217,28 +207,13 @@ func TestWake(t *testing.T) {
 			expectError:      "",
 		},
 		{
-			name:        "wake with annotation timeout",
-			sandboxName: "sbx-annot",
+			name:        "wake with rule pause timeout below resume floor is raised to floor",
+			sandboxName: "sbx-rule-below-floor",
 			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "120",
-			},
-			shutdownTime: &metav1.Time{Time: shutdownTime},
-			pauseTime:    &metav1.Time{Time: pauseTime},
-			// 120s is below the resume floor and must be raised.
-			defaultTimeout:   60 * time.Second,
-			wantPauseSeconds: 300,
-			simulateResume:   true,
-			expectError:      "",
-		},
-		{
-			name:        "wake annotation below resume floor is raised to floor",
-			sandboxName: "sbx-annot-below-floor",
-			sandboxNS:   "default",
-			annotations: map[string]string{
+			wakeRule: &agentsv1alpha1.IngressTrafficRule{
 				// The create API allows wake timeouts as short as 30s; the
 				// written PauseTime must not expire mid-resume.
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "30",
+				PauseTimeout: &metav1.Duration{Duration: 30 * time.Second},
 			},
 			shutdownTime:     &metav1.Time{Time: shutdownTime},
 			pauseTime:        &metav1.Time{Time: pauseTime},
@@ -248,11 +223,11 @@ func TestWake(t *testing.T) {
 			expectError:      "",
 		},
 		{
-			name:        "wake annotation above resume floor unchanged",
-			sandboxName: "sbx-annot-above-floor",
+			name:        "wake with rule pause timeout above resume floor unchanged",
+			sandboxName: "sbx-rule-above-floor",
 			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "600",
+			wakeRule: &agentsv1alpha1.IngressTrafficRule{
+				PauseTimeout: &metav1.Duration{Duration: 600 * time.Second},
 			},
 			shutdownTime:     &metav1.Time{Time: shutdownTime},
 			pauseTime:        &metav1.Time{Time: pauseTime},
@@ -262,24 +237,11 @@ func TestWake(t *testing.T) {
 			expectError:      "",
 		},
 		{
-			name:        "invalid annotation falls back to default",
-			sandboxName: "sbx-invalid",
+			name:        "non-positive rule pause timeout falls back to default",
+			sandboxName: "sbx-rule-non-positive",
 			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "abc",
-			},
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 60 * time.Second,
-			simulateResume: true,
-			expectError:    "",
-		},
-		{
-			name:        "negative annotation falls back to default",
-			sandboxName: "sbx-negative",
-			sandboxNS:   "default",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "-5",
+			wakeRule: &agentsv1alpha1.IngressTrafficRule{
+				PauseTimeout: &metav1.Duration{Duration: -5 * time.Second},
 			},
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
@@ -291,7 +253,6 @@ func TestWake(t *testing.T) {
 			name:           "short default timeout still resumes",
 			sandboxName:    "sbx-short-timeout",
 			sandboxNS:      "default",
-			annotations:    map[string]string{},
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      &metav1.Time{Time: pauseTime},
 			defaultTimeout: 30 * time.Second,
@@ -305,7 +266,6 @@ func TestWake(t *testing.T) {
 			name:           "wake preserves nil ShutdownTime",
 			sandboxName:    "sbx-nil-shutdown",
 			sandboxNS:      "default",
-			annotations:    map[string]string{},
 			shutdownTime:   nil,
 			pauseTime:      nil,
 			defaultTimeout: 30 * time.Second,
@@ -318,7 +278,6 @@ func TestWake(t *testing.T) {
 			name:           "wake shutdown-only sandbox preserves nil PauseTime",
 			sandboxName:    "sbx-shutdown-only",
 			sandboxNS:      "default",
-			annotations:    map[string]string{},
 			shutdownTime:   &metav1.Time{Time: shutdownTime},
 			pauseTime:      nil,
 			defaultTimeout: 30 * time.Second,
@@ -345,9 +304,16 @@ func TestWake(t *testing.T) {
 				return
 			}
 
-			sbx := newPausedSandbox(tt.sandboxName, tt.sandboxNS, tt.annotations, tt.shutdownTime)
+			sbx := newPausedSandbox(tt.sandboxName, tt.sandboxNS, tt.shutdownTime)
 			if tt.pauseTime != nil {
 				sbx.Spec.PauseTime = tt.pauseTime
+			}
+			if tt.wakeRule != nil {
+				sbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Resume: &agentsv1alpha1.ResumePolicy{
+						WhenIngressTraffic: tt.wakeRule,
+					},
+				}
 			}
 
 			cacheProvider, fc, err := cachetest.NewTestCache(t)
