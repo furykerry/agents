@@ -33,8 +33,8 @@ func TestStripSandboxCacheFields(t *testing.T) {
 	sandbox := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
-				"agents.kruise.io/wake-on-traffic":      "true",
-				"agents.kruise.io/wake-timeout-seconds": "30",
+				"example.com/team":  "sandbox",
+				"example.com/owner": "test-user",
 			},
 			ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "controller"}},
 		},
