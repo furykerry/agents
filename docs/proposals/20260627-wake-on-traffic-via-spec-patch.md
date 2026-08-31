@@ -173,26 +173,34 @@ informer cache, and every extra route field widens the peer-sync contract.
 
 ### Sandbox controller: recycle reset
 
-Wake configuration is per-tenant, so a recycled pool CR must not inherit it.
-`resetMetadataForPool` (`pkg/controller/sandbox/core/recycle.go`, Part 1, next to
-the existing `Spec.ShutdownTime` / `Spec.PauseTime` reset) clears the rule and
-prunes the now-empty parents so the pooled spec stays byte-identical to a fresh
-one:
+Probes and AutoPausePolicy are declared by the SandboxSet spec (and by
+extension the update revision), so a recycled pool CR must match a
+freshly-created one byte-for-byte. `resetSandboxForPool`
+(`pkg/controller/sandbox/core/recycle.go`, Part 1, next to the existing
+`Spec.ShutdownTime` / `Spec.PauseTime` reset) restores both fields verbatim
+from the SandboxSet. Any per-tenant wake rule written by the E2B create
+path is overwritten; probe-driven rules declared by the template or an
+operator survive because they are part of the SandboxSet policy.
 
 ```go
-if p := box.Spec.AutoPausePolicy; p != nil && p.Resume != nil {
-    p.Resume.OnIngressTraffic = nil
-    if p.Resume.WhenProbedScheduleTime == nil {
-        p.Resume = nil
+if sbs.Spec.Probes != nil {
+    probes := make([]agentsv1alpha1.Probe, len(sbs.Spec.Probes))
+    for i := range sbs.Spec.Probes {
+        sbs.Spec.Probes[i].DeepCopyInto(&probes[i])
     }
-    if p.Pause == nil && p.Resume == nil {
-        box.Spec.AutoPausePolicy = nil
-    }
+    box.Spec.Probes = probes
+} else {
+    box.Spec.Probes = nil
+}
+if sbs.Spec.AutoPausePolicy != nil {
+    box.Spec.AutoPausePolicy = sbs.Spec.AutoPausePolicy.DeepCopy()
+} else {
+    box.Spec.AutoPausePolicy = nil
 }
 ```
 
-The probe-driven rules are intentionally left untouched: they are declared by
-the SandboxSet template or by an operator, not by a claim.
+Deep copies guard against mutating the SandboxSet informer cache during
+the merge-patch.
 
 ### Sandbox controller: `checkTimers`
 
@@ -340,7 +348,7 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 | Read helpers | `pkg/utils/utils.go` | Add the two spec-read helpers shared by gateway, controller and route projection |
 | Generated output | `client/`, `config/crd/` | `make generate manifests` (never edited by hand) |
 | Route projection | `pkg/sandboxroute/route.go` | `WakeOnTraffic` derived from the helper |
-| Recycle | `pkg/controller/sandbox/core/recycle.go` | Clear the rule in `resetMetadataForPool` and prune empty parents |
+| Recycle | `pkg/controller/sandbox/core/recycle.go` | `resetSandboxForPool` restores `Probes` and `AutoPausePolicy` from the SandboxSet; per-tenant wake rules are overwritten |
 | Auto-pause guard | sandbox controller `checkTimers` | `hasActiveAutoPausePolicy` ignores `OnIngressTraffic` |
 | Infra setter | `pkg/sandbox-manager/infra/interface.go`, `infra/sandboxcr/sandbox.go` | Add `SetWakeOnIngressTraffic` |
 | E2B create | `pkg/servers/e2b/create.go` | Call the setter to express the wake configuration; drop the metadata `wake-timeout-seconds` override |
@@ -361,9 +369,11 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
   as `PauseTimeout` for auto-pause sandboxes (including a recycled CR
   carrying a stale rule) and none for never-timeout/shutdown-only ones;
   disabled clears the rule.
-- **Recycle** (`pkg/controller/sandbox/core/recycle_test.go`): cover a CR with
-  the spec rule (alone, and combined with a probed rule); assert the reset and
-  empty-parent pruning.
+- **Recycle** (`pkg/controller/sandbox/core/recycle_test.go`): `Probes` and
+  `AutoPausePolicy` are restored verbatim from the SandboxSet; a per-tenant
+  wake rule written by the E2B create path is overwritten by the SandboxSet
+  policy (which may be nil); a nil-SandboxSet field clears any tenant-added
+  value.
 - **`checkTimers` guard**: a sandbox whose only policy is `OnIngressTraffic`
   still auto-pauses at `PauseTime`; adding a probed rule suppresses the timer.
 - **Wake timeout resolution** (`pkg/sandbox-gateway/wake`): positive spec

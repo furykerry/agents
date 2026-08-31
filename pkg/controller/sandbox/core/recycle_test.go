@@ -1118,7 +1118,7 @@ func TestEnsureSandboxRecycled(t *testing.T) {
 	}
 }
 
-func TestResetForPool(t *testing.T) {
+func TestResetSandboxForPool(t *testing.T) {
 	now := metav1.Now()
 	tests := []struct {
 		name                  string
@@ -1400,7 +1400,7 @@ func TestResetForPool(t *testing.T) {
 			}
 			control, fakeClient := newTestRecycleControl(t, objs, nil, 0, 0)
 
-			err := control.resetMetadataForPool(context.TODO(), tt.box, tt.sbs)
+			err := control.resetSandboxForPool(context.TODO(), tt.box, tt.sbs)
 
 			if tt.expectError != "" {
 				require.Error(t, err)
@@ -1462,7 +1462,7 @@ func TestResetForPool(t *testing.T) {
 	}
 }
 
-func TestResetForPool_PatchError(t *testing.T) {
+func TestResetSandboxForPool_PatchError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = agentsv1alpha1.AddToScheme(scheme)
@@ -1498,7 +1498,7 @@ func TestResetForPool_PatchError(t *testing.T) {
 
 	control := NewSandboxRecycleControl(fakeClient, record.NewFakeRecorder(10), SandboxRecycleConfig{})
 
-	err := control.resetMetadataForPool(context.TODO(), box, sbs)
+	err := control.resetSandboxForPool(context.TODO(), box, sbs)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to reset sandbox for pool")

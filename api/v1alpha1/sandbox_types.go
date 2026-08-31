@@ -91,8 +91,12 @@ type SandboxSpec struct {
 	// +optional
 	Probes []Probe `json:"probes,omitempty"`
 
-	// AutoPausePolicy defines pause/resume decision rules based on probe
-	// Conditions. Probes are defined in Spec.Probes.
+	// AutoPausePolicy defines when the sandbox controller pauses or resumes
+	// the sandbox. Probe-driven rules reference probes declared in
+	// Spec.Probes and read their results (mirrored from
+	// Pod.Status.Conditions to SandboxStatus.Conditions); the
+	// OnIngressTraffic resume rule is event-driven and does not require a
+	// probe.
 	// +optional
 	AutoPausePolicy *AutoPausePolicy `json:"autoPausePolicy,omitempty"`
 
@@ -246,11 +250,12 @@ type Probe struct {
 	v1.Probe `json:",inline"`
 }
 
-// AutoPausePolicy defines pause/resume decision rules based on probe
-// Conditions. Probes are defined separately in Spec.Probes.
-// When set, the sandbox controller evaluates pause/resume rules.
-// Probe results (from Spec.Probes) are read via Pod.Status.Conditions
-// and mirrored to SandboxStatus.Conditions.
+// AutoPausePolicy defines when the sandbox controller pauses or resumes the
+// sandbox. Probe-driven rules (WhenProbedIdleState, WhenProbedScheduleTime)
+// reference probes declared in Spec.Probes and read their results (mirrored
+// from Pod.Status.Conditions to SandboxStatus.Conditions); the
+// OnIngressTraffic resume rule is event-driven and does not require a probe.
+// When set, the sandbox controller evaluates the rules.
 // +optional
 type AutoPausePolicy struct {
 	// Pause defines the pause policy for the sandbox.

@@ -326,7 +326,7 @@ func (r *SandboxRecycleControl) handleRecycleGracePeriod(ctx context.Context, ar
 		return r.config.GracePeriod - elapsed, nil
 	}
 
-	if err := r.resetMetadataForPool(ctx, box, sbs); err != nil {
+	if err := r.resetSandboxForPool(ctx, box, sbs); err != nil {
 		return 0, &RetriableError{Err: err}
 	}
 
@@ -401,7 +401,7 @@ func (r *SandboxRecycleControl) handleRecycleFailed(ctx context.Context, box *ag
 	return retainDuration, nil
 }
 
-func (r *SandboxRecycleControl) resetMetadataForPool(ctx context.Context, box *agentsv1alpha1.Sandbox, sbs *agentsv1alpha1.SandboxSet) error {
+func (r *SandboxRecycleControl) resetSandboxForPool(ctx context.Context, box *agentsv1alpha1.Sandbox, sbs *agentsv1alpha1.SandboxSet) error {
 	patch := client.MergeFrom(box.DeepCopy())
 
 	// Part 1: Reset fixed claim metadata

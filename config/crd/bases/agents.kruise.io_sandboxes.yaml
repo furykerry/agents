@@ -65,8 +65,12 @@ spec:
             properties:
               autoPausePolicy:
                 description: |-
-                  AutoPausePolicy defines pause/resume decision rules based on probe
-                  Conditions. Probes are defined in Spec.Probes.
+                  AutoPausePolicy defines when the sandbox controller pauses or resumes
+                  the sandbox. Probe-driven rules reference probes declared in
+                  Spec.Probes and read their results (mirrored from
+                  Pod.Status.Conditions to SandboxStatus.Conditions); the
+                  OnIngressTraffic resume rule is event-driven and does not require a
+                  probe.
                 properties:
                   pause:
                     description: Pause defines the pause policy for the sandbox.

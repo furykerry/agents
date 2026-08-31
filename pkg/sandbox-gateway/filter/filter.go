@@ -302,8 +302,10 @@ func (f *sandboxFilter) verifierUnavailable(sandboxID string) api.StatusType {
 // by traffic. Returns true only when wake-on-traffic is enabled, the sandbox
 // is Paused, the waker is initialized, the route carries a full ObjectKey,
 // the informer still holds a sandbox with the route's UID (stale-route
-// fence), and either the route registry already has WakeOnTraffic set or the
-// annotation fallback check succeeds.
+// fence), and either the route registry already has WakeOnTraffic set or
+// WakeEnabled reads the spec directly from the informer cache (covering the
+// window between a spec patch and the gateway controller reconciling the
+// change into the route registry).
 func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.Waker) bool {
 	if route.State != agentsv1alpha1.SandboxStatePaused {
 		return false
