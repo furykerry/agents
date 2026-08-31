@@ -1204,6 +1204,7 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 		name         string
 		initial      *v1alpha1.AutoPausePolicy
 		enabled      bool
+		pauseTimeout time.Duration
 		expectPolicy *v1alpha1.AutoPausePolicy
 	}{
 		{
@@ -1214,7 +1215,15 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 			},
 		},
 		{
-			// The setter never writes a PauseTimeout; a stale inherited one is
+			name:         "enable with pause timeout writes it into the rule",
+			enabled:      true,
+			pauseTimeout: 10 * time.Minute,
+			expectPolicy: &v1alpha1.AutoPausePolicy{
+				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
+			},
+		},
+		{
+			// The caller passes no pauseTimeout; a stale inherited one is
 			// replaced by a bare rule.
 			name: "enable replaces stale rule without keeping its pause timeout",
 			initial: &v1alpha1.AutoPausePolicy{
@@ -1269,7 +1278,7 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 				Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
 			}}
 
-			s.SetWakeOnIngressTraffic(tt.enabled)
+			s.SetWakeOnIngressTraffic(tt.enabled, tt.pauseTimeout)
 
 			assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
 		})

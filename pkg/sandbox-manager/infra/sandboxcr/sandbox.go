@@ -379,10 +379,11 @@ func (s *Sandbox) SetTimeout(opts timeout.Options) {
 }
 
 // SetWakeOnIngressTraffic enables or clears the wake-on-ingress-traffic resume
-// rule. The rule carries no PauseTimeout: a traffic wake re-arms auto-pause
-// only when the spec sets one explicitly. Clearing prunes the now-empty
+// rule. A positive pauseTimeout becomes the rule's PauseTimeout so a traffic
+// wake re-arms auto-pause with it; a non-positive value leaves PauseTimeout
+// unset and the wake does not re-arm auto-pause. Clearing prunes the now-empty
 // parents so a pooled spec stays byte-identical to a fresh one.
-func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool) {
+func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Duration) {
 	policy := s.Sandbox.Spec.AutoPausePolicy
 	if !enabled {
 		if policy == nil || policy.Resume == nil {
@@ -405,6 +406,9 @@ func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool) {
 		policy.Resume = &agentsv1alpha1.ResumePolicy{}
 	}
 	rule := &agentsv1alpha1.IngressTrafficRule{}
+	if pauseTimeout > 0 {
+		rule.PauseTimeout = &metav1.Duration{Duration: pauseTimeout}
+	}
 	policy.Resume.OnIngressTraffic = rule
 }
 

@@ -216,9 +216,10 @@ interface gains one narrow setter, implemented by `sandboxcr.Sandbox` next to
 
 ```go
 // SetWakeOnIngressTraffic enables or clears the wake-on-ingress-traffic resume
-// rule. The rule carries no PauseTimeout: a traffic wake re-arms auto-pause
-// only when the spec sets one explicitly.
-SetWakeOnIngressTraffic(enabled bool)
+// rule. A positive pauseTimeout becomes the rule's PauseTimeout so a traffic
+// wake re-arms auto-pause with it; a non-positive value leaves PauseTimeout
+// unset and the wake does not re-arm auto-pause.
+SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Duration)
 ```
 
 `basicSandboxCreateModifier` (`pkg/servers/e2b/create.go`) calls the setter to
@@ -227,12 +228,17 @@ removed along with it.
 
 ```go
 if request.AutoResume.Enabled {
-    // The wake rule carries no default PauseTimeout: a traffic wake re-arms
-    // auto-pause only when the rule explicitly sets one, otherwise the
-    // sandbox keeps running after the wake.
-    sbx.SetWakeOnIngressTraffic(true)
+    // The re-armed pause timeout only feeds the fresh PauseTime that the
+    // gateway wake path writes for auto-pause sandboxes; shutdown-only
+    // and never-timeout sandboxes never carry a PauseTime, so leave it
+    // unset for them: their wakes must not re-arm auto-pause.
+    var pauseTimeout time.Duration
+    if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
+        pauseTimeout = time.Duration(request.Timeout) * time.Second
+    }
+    sbx.SetWakeOnIngressTraffic(true, pauseTimeout)
 } else {
-    sbx.SetWakeOnIngressTraffic(false)
+    sbx.SetWakeOnIngressTraffic(false, 0)
 }
 ```
 
@@ -351,9 +357,10 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 - **Route projection** (`pkg/sandboxroute/route_test.go`): cover wake cases
   driven by the spec rule, asserting `Route.WakeOnTraffic`.
 - **E2B create modifier** (`pkg/servers/e2b/create_test.go`): extend the existing
-  `autoResume` table — enabled sets the wake rule without any `PauseTimeout`
-  (never defaulted), including a recycled CR carrying a stale rule; disabled
-  clears the rule.
+  `autoResume` table — enabled sets the wake rule, with the request timeout
+  as `PauseTimeout` for auto-pause sandboxes (including a recycled CR
+  carrying a stale rule) and none for never-timeout/shutdown-only ones;
+  disabled clears the rule.
 - **Recycle** (`pkg/controller/sandbox/core/recycle_test.go`): cover a CR with
   the spec rule (alone, and combined with a probed rule); assert the reset and
   empty-parent pruning.

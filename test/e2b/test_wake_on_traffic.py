@@ -154,15 +154,16 @@ def test_wake_on_traffic(sandbox_context):
     assert sbx.get_info().state == SandboxState.RUNNING
 
     # Step 2: Verify the wake rule was written to the spec by the API.
-    # The rule carries no pauseTimeout: a traffic wake must not re-arm
-    # auto-pause unless the spec sets one explicitly.
+    # Auto-pause sandboxes get the request timeout as the rule's
+    # pauseTimeout, so a traffic wake re-arms auto-pause with it.
     wake_rule = _get_wake_rule(sbx)
     assert wake_rule is not None, (
         "autoResume=true should set spec.autoPausePolicy.resume.onIngressTraffic, "
         f"got CR spec: {_get_sandbox_cr(sbx).get('spec', {})}"
     )
-    assert "pauseTimeout" not in wake_rule, (
-        f"autoResume=true must not default pauseTimeout, got: {wake_rule}"
+    # metav1.Duration marshals 120s as "2m0s"; accept both renderings.
+    assert wake_rule.get("pauseTimeout") in ("120s", "2m0s"), (
+        f"autoResume=true should set pauseTimeout from the request timeout, got: {wake_rule}"
     )
     print(f"wake rule verified: {wake_rule}")
 
