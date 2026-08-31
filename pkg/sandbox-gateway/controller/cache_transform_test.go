@@ -30,6 +30,7 @@ import (
 
 func TestStripSandboxCacheFields(t *testing.T) {
 	pauseTime := metav1.NewTime(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
+	wakePauseTimeout := 5 * time.Minute
 	sandbox := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
@@ -41,6 +42,13 @@ func TestStripSandboxCacheFields(t *testing.T) {
 		Spec: agentsv1alpha1.SandboxSpec{
 			Paused:    true,
 			PauseTime: &pauseTime,
+			AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
+				Resume: &agentsv1alpha1.ResumePolicy{
+					OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
+						PauseTimeout: &metav1.Duration{Duration: wakePauseTimeout},
+					},
+				},
+			},
 			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				TemplateRef: &agentsv1alpha1.SandboxTemplateRef{Name: "template-a"},
 				Template: &corev1.PodTemplateSpec{

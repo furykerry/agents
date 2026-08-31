@@ -378,26 +378,12 @@ func (s *Sandbox) SetTimeout(opts timeout.Options) {
 	setTimeout(s.Sandbox, opts)
 }
 
-// SetWakeOnIngressTraffic enables or clears the wake-on-ingress-traffic resume
-// rule. A positive pauseTimeout becomes the rule's PauseTimeout so a traffic
-// wake re-arms auto-pause with it; a non-positive value leaves PauseTimeout
-// unset and the wake does not re-arm auto-pause. Clearing prunes the now-empty
-// parents so a pooled spec stays byte-identical to a fresh one.
-func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Duration) {
+// EnableWakeOnIngressTraffic arms the wake-on-ingress-traffic resume rule. A
+// positive pauseTimeout becomes the rule's PauseTimeout so a traffic wake
+// re-arms auto-pause with it; a non-positive value leaves PauseTimeout unset
+// and the wake does not re-arm auto-pause.
+func (s *Sandbox) EnableWakeOnIngressTraffic(pauseTimeout time.Duration) {
 	policy := s.Sandbox.Spec.AutoPausePolicy
-	if !enabled {
-		if policy == nil || policy.Resume == nil {
-			return
-		}
-		policy.Resume.OnIngressTraffic = nil
-		if policy.Resume.WhenProbedScheduleTime == nil {
-			policy.Resume = nil
-		}
-		if policy.Pause == nil && policy.Resume == nil {
-			s.Sandbox.Spec.AutoPausePolicy = nil
-		}
-		return
-	}
 	if policy == nil {
 		policy = &agentsv1alpha1.AutoPausePolicy{}
 		s.Sandbox.Spec.AutoPausePolicy = policy
@@ -410,6 +396,23 @@ func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Durati
 		rule.PauseTimeout = &metav1.Duration{Duration: pauseTimeout}
 	}
 	policy.Resume.OnIngressTraffic = rule
+}
+
+// ClearWakeOnIngressTraffic removes the wake-on-ingress-traffic resume rule
+// and prunes now-empty parent policy nodes so a pooled spec stays
+// byte-identical to a fresh one.
+func (s *Sandbox) ClearWakeOnIngressTraffic() {
+	policy := s.Sandbox.Spec.AutoPausePolicy
+	if policy == nil || policy.Resume == nil {
+		return
+	}
+	policy.Resume.OnIngressTraffic = nil
+	if *policy.Resume == (agentsv1alpha1.ResumePolicy{}) {
+		policy.Resume = nil
+	}
+	if policy.Pause == nil && policy.Resume == nil {
+		s.Sandbox.Spec.AutoPausePolicy = nil
+	}
 }
 
 func (s *Sandbox) GetPodLabels() map[string]string {

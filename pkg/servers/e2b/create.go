@@ -437,11 +437,11 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 		if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
 			pauseTimeout = time.Duration(request.Timeout) * time.Second
 		}
-		sbx.SetWakeOnIngressTraffic(true, pauseTimeout)
+		sbx.EnableWakeOnIngressTraffic(pauseTimeout)
 	} else {
 		// Called on both branches so a claimed CR that still holds a
 		// previous delivery's rule is reset even if its recycle was skipped.
-		sbx.SetWakeOnIngressTraffic(false, 0)
+		sbx.ClearWakeOnIngressTraffic()
 	}
 	sbx.SetAnnotations(annotations)
 

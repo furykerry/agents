@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,6 +78,10 @@ func (w *Waker) SandboxUIDMatches(ctx context.Context, namespace, name string, u
 	cli := w.cache.GetClient()
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
+		if !errors.IsNotFound(err) {
+			klog.FromContext(ctx).Error(err, "read sandbox for stale-route UID check",
+				"sandbox", klog.KRef(namespace, name))
+		}
 		return false
 	}
 	return sbx.UID == uid
@@ -93,6 +98,10 @@ func (w *Waker) WakeEnabled(ctx context.Context, namespace, name string) bool {
 	cli := w.cache.GetClient()
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
+		if !errors.IsNotFound(err) {
+			klog.FromContext(ctx).Error(err, "read sandbox for wake-enabled check",
+				"sandbox", klog.KRef(namespace, name))
+		}
 		return false
 	}
 	return utils.WakeOnIngressTrafficEnabled(&sbx)

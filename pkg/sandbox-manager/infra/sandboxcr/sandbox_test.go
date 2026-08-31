@@ -1192,7 +1192,7 @@ func getTimeFromMetaTime(t *metav1.Time) time.Time {
 	return t.Time
 }
 
-func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
+func TestSandbox_WakeOnIngressTraffic(t *testing.T) {
 	wakeRule := func(timeout time.Duration) *v1alpha1.IngressTrafficRule {
 		rule := &v1alpha1.IngressTrafficRule{}
 		if timeout > 0 {
@@ -1200,89 +1200,102 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 		}
 		return rule
 	}
-	tests := []struct {
-		name         string
-		initial      *v1alpha1.AutoPausePolicy
-		enabled      bool
-		pauseTimeout time.Duration
-		expectPolicy *v1alpha1.AutoPausePolicy
-	}{
-		{
-			name:    "enable on empty spec",
-			enabled: true,
-			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
-			},
-		},
-		{
-			name:         "enable with pause timeout writes it into the rule",
-			enabled:      true,
-			pauseTimeout: 10 * time.Minute,
-			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
-			},
-		},
-		{
-			// The caller passes no pauseTimeout; a stale inherited one is
-			// replaced by a bare rule.
-			name: "enable replaces stale rule without keeping its pause timeout",
-			initial: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(999 * time.Second)},
-			},
-			enabled: true,
-			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
-			},
-		},
-		{
-			name:         "disable on empty spec is a no-op",
-			enabled:      false,
-			expectPolicy: nil,
-		},
-		{
-			name: "disable clears wake rule and prunes empty parents",
-			initial: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
-			},
-			enabled:      false,
-			expectPolicy: nil,
-		},
-		{
-			name: "disable keeps probed resume rule",
-			initial: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{
-					WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{},
-					OnIngressTraffic:       wakeRule(10 * time.Minute),
+
+	t.Run("Enable", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			initial      *v1alpha1.AutoPausePolicy
+			pauseTimeout time.Duration
+			expectPolicy *v1alpha1.AutoPausePolicy
+		}{
+			{
+				name: "on empty spec",
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
 				},
 			},
-			enabled: false,
-			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{}},
+			{
+				name:         "with pause timeout writes it into the rule",
+				pauseTimeout: 10 * time.Minute,
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
+				},
 			},
-		},
-		{
-			name: "disable keeps pause policy",
-			initial: &v1alpha1.AutoPausePolicy{
-				Pause:  &v1alpha1.PausePolicy{},
-				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+			{
+				name: "replaces stale rule without keeping its pause timeout",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(999 * time.Second)},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+				},
 			},
-			enabled: false,
-			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Pause: &v1alpha1.PausePolicy{},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
-				Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
-			}}
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+					Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
+				}}
 
-			s.SetWakeOnIngressTraffic(tt.enabled, tt.pauseTimeout)
+				s.EnableWakeOnIngressTraffic(tt.pauseTimeout)
 
-			assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
-		})
-	}
+				assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
+			})
+		}
+	})
+
+	t.Run("Clear", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			initial      *v1alpha1.AutoPausePolicy
+			expectPolicy *v1alpha1.AutoPausePolicy
+		}{
+			{
+				name:         "on empty spec is a no-op",
+				expectPolicy: nil,
+			},
+			{
+				name: "clears wake rule and prunes empty parents",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
+				},
+				expectPolicy: nil,
+			},
+			{
+				name: "keeps probed resume rule",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{
+						WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{},
+						OnIngressTraffic:       wakeRule(10 * time.Minute),
+					},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{}},
+				},
+			},
+			{
+				name: "keeps pause policy",
+				initial: &v1alpha1.AutoPausePolicy{
+					Pause:  &v1alpha1.PausePolicy{},
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Pause: &v1alpha1.PausePolicy{},
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+					Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
+				}}
+
+				s.ClearWakeOnIngressTraffic()
+
+				assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
+			})
+		}
+	})
 }
 
 func TestSandbox_GetClaimTime(t *testing.T) {
