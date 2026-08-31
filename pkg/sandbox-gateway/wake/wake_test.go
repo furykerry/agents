@@ -107,7 +107,7 @@ func TestWakeEnabled(t *testing.T) {
 				if tt.withRule {
 					sbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
 						Resume: &agentsv1alpha1.ResumePolicy{
-							WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+							OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
 						},
 					}
 				}
@@ -311,7 +311,7 @@ func TestWake(t *testing.T) {
 			if tt.wakeRule != nil {
 				sbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
 					Resume: &agentsv1alpha1.ResumePolicy{
-						WhenIngressTraffic: tt.wakeRule,
+						OnIngressTraffic: tt.wakeRule,
 					},
 				}
 			}

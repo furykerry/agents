@@ -1287,8 +1287,8 @@ func (in *ResumePolicy) DeepCopyInto(out *ResumePolicy) {
 		*out = new(ProbedScheduleTimeRule)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.WhenIngressTraffic != nil {
-		in, out := &in.WhenIngressTraffic, &out.WhenIngressTraffic
+	if in.OnIngressTraffic != nil {
+		in, out := &in.OnIngressTraffic, &out.OnIngressTraffic
 		*out = new(IngressTrafficRule)
 		(*in).DeepCopyInto(*out)
 	}

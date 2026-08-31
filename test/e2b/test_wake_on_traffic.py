@@ -17,7 +17,7 @@ GATEWAY_URL = "http://localhost:80"
 _HEALTH_PATH = "/kruise/api/health"
 
 # Spec path of the wake-on-traffic rule.
-_WAKE_RULE_PATH = ("spec", "autoPausePolicy", "resume", "whenIngressTraffic")
+_WAKE_RULE_PATH = ("spec", "autoPausePolicy", "resume", "onIngressTraffic")
 
 # e2b-code-interpreter 2.4.x predates the `lifecycle={"on_timeout": "pause"}`
 # parameter, so auto-pause cannot be requested through that SDK.
@@ -62,7 +62,7 @@ def _get_sandbox_annotations(sbx: Sandbox) -> dict:
 
 
 def _get_wake_rule(sbx: Sandbox) -> dict | None:
-    """Fetch spec.autoPausePolicy.resume.whenIngressTraffic of the CR."""
+    """Fetch spec.autoPausePolicy.resume.onIngressTraffic of the CR."""
     node = _get_sandbox_cr(sbx)
     for key in _WAKE_RULE_PATH:
         if not isinstance(node, dict) or key not in node:
@@ -156,7 +156,7 @@ def test_wake_on_traffic(sandbox_context):
     # Step 2: Verify the wake rule was written to the spec by the API.
     wake_rule = _get_wake_rule(sbx)
     assert wake_rule is not None, (
-        "autoResume=true should set spec.autoPausePolicy.resume.whenIngressTraffic, "
+        "autoResume=true should set spec.autoPausePolicy.resume.onIngressTraffic, "
         f"got CR spec: {_get_sandbox_cr(sbx).get('spec', {})}"
     )
     assert wake_rule.get("pauseTimeout") == "2m0s", (

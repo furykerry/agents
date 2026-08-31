@@ -388,7 +388,7 @@ func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Durati
 		if policy == nil || policy.Resume == nil {
 			return
 		}
-		policy.Resume.WhenIngressTraffic = nil
+		policy.Resume.OnIngressTraffic = nil
 		if policy.Resume.WhenProbedScheduleTime == nil {
 			policy.Resume = nil
 		}
@@ -408,7 +408,7 @@ func (s *Sandbox) SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Durati
 	if pauseTimeout > 0 {
 		rule.PauseTimeout = &metav1.Duration{Duration: pauseTimeout}
 	}
-	policy.Resume.WhenIngressTraffic = rule
+	policy.Resume.OnIngressTraffic = rule
 }
 
 func (s *Sandbox) GetPodLabels() map[string]string {

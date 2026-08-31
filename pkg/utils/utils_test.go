@@ -2008,12 +2008,12 @@ func TestWakeOnIngressTraffic(t *testing.T) {
 		},
 		{
 			name:        "ingress traffic rule without pause timeout",
-			sandbox:     sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{}}),
+			sandbox:     sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{}}),
 			wantEnabled: true,
 		},
 		{
 			name: "ingress traffic rule with pause timeout",
-			sandbox: sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
+			sandbox: sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
 				PauseTimeout: &metav1.Duration{Duration: 5 * time.Minute},
 			}}),
 			wantEnabled: true,
@@ -2021,7 +2021,7 @@ func TestWakeOnIngressTraffic(t *testing.T) {
 		},
 		{
 			name: "ingress traffic rule with non-positive pause timeout",
-			sandbox: sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
+			sandbox: sandboxWithResume(nil, &agentsv1alpha1.ResumePolicy{OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
 				PauseTimeout: &metav1.Duration{Duration: -time.Second},
 			}}),
 			wantEnabled: true,

@@ -390,7 +390,7 @@ func IsSandboxResumable(sbx *agentsv1alpha1.Sandbox) (bool, string) {
 func WakeOnIngressTrafficEnabled(sbx *agentsv1alpha1.Sandbox) bool {
 	return sbx != nil && sbx.Spec.AutoPausePolicy != nil &&
 		sbx.Spec.AutoPausePolicy.Resume != nil &&
-		sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic != nil
+		sbx.Spec.AutoPausePolicy.Resume.OnIngressTraffic != nil
 }
 
 // WakeOnIngressTrafficPauseTimeout returns the auto-pause timeout to re-arm
@@ -399,7 +399,7 @@ func WakeOnIngressTrafficPauseTimeout(sbx *agentsv1alpha1.Sandbox) time.Duration
 	if sbx == nil || sbx.Spec.AutoPausePolicy == nil || sbx.Spec.AutoPausePolicy.Resume == nil {
 		return 0
 	}
-	rule := sbx.Spec.AutoPausePolicy.Resume.WhenIngressTraffic
+	rule := sbx.Spec.AutoPausePolicy.Resume.OnIngressTraffic
 	if rule == nil || rule.PauseTimeout == nil || rule.PauseTimeout.Duration <= 0 {
 		return 0
 	}

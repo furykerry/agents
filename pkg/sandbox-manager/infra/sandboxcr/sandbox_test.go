@@ -1212,14 +1212,14 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 			enabled:      true,
 			pauseTimeout: 10 * time.Minute,
 			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(10 * time.Minute)},
+				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
 			},
 		},
 		{
 			name:    "enable without timeout",
 			enabled: true,
 			expectPolicy: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(0)},
+				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
 			},
 		},
 		{
@@ -1230,7 +1230,7 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 		{
 			name: "disable clears wake rule and prunes empty parents",
 			initial: &v1alpha1.AutoPausePolicy{
-				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(10 * time.Minute)},
+				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
 			},
 			enabled:      false,
 			expectPolicy: nil,
@@ -1240,7 +1240,7 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 			initial: &v1alpha1.AutoPausePolicy{
 				Resume: &v1alpha1.ResumePolicy{
 					WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{},
-					WhenIngressTraffic:     wakeRule(10 * time.Minute),
+					OnIngressTraffic:       wakeRule(10 * time.Minute),
 				},
 			},
 			enabled: false,
@@ -1252,7 +1252,7 @@ func TestSandbox_SetWakeOnIngressTraffic(t *testing.T) {
 			name: "disable keeps pause policy",
 			initial: &v1alpha1.AutoPausePolicy{
 				Pause:  &v1alpha1.PausePolicy{},
-				Resume: &v1alpha1.ResumePolicy{WhenIngressTraffic: wakeRule(0)},
+				Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
 			},
 			enabled: false,
 			expectPolicy: &v1alpha1.AutoPausePolicy{

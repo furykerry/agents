@@ -277,13 +277,13 @@ type ResumePolicy struct {
 	// +optional
 	WhenProbedScheduleTime *ProbedScheduleTimeRule `json:"whenProbedScheduleTime,omitempty"`
 
-	// WhenIngressTraffic resumes the sandbox when the sandbox-gateway receives
+	// OnIngressTraffic resumes the sandbox when the sandbox-gateway receives
 	// inbound traffic addressed to it while it is paused. Unlike the probed
 	// rules this one is event-driven: it needs no probe, it produces no
 	// Status.Schedules entry, and it is executed by the sandbox-gateway rather
 	// than by the sandbox controller.
 	// +optional
-	WhenIngressTraffic *IngressTrafficRule `json:"whenIngressTraffic,omitempty"`
+	OnIngressTraffic *IngressTrafficRule `json:"onIngressTraffic,omitempty"`
 }
 
 // ProbedIdleStateRule defines the rule for pausing when a probe reports

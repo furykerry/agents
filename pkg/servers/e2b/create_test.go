@@ -1144,7 +1144,7 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			if tt.initialWakeRule != nil {
 				mockSbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
 					Resume: &agentsv1alpha1.ResumePolicy{
-						WhenIngressTraffic: tt.initialWakeRule,
+						OnIngressTraffic: tt.initialWakeRule,
 					},
 				}
 			}

@@ -60,7 +60,7 @@ type TrafficAccessToken struct {
 
 // SandboxAutoResumeConfig mirrors the E2B API's autoResume field.
 // When Enabled is true, the sandbox declares
-// spec.autoPausePolicy.resume.whenIngressTraffic so the sandbox-gateway
+// spec.autoPausePolicy.resume.onIngressTraffic so the sandbox-gateway
 // will auto-resume it on incoming traffic after it is paused.
 type SandboxAutoResumeConfig struct {
 	Enabled bool `json:"enabled"`

@@ -1332,7 +1332,7 @@ func TestDecodeHeadersWakeOnTrafficCacheFallback(t *testing.T) {
 		Spec: agentsv1alpha1.SandboxSpec{
 			AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
 				Resume: &agentsv1alpha1.ResumePolicy{
-					WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+					OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
 				},
 			},
 		},
@@ -1556,7 +1556,7 @@ func TestWakeAndContinueSuccess(t *testing.T) {
 			Paused: true,
 			AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
 				Resume: &agentsv1alpha1.ResumePolicy{
-					WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+					OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
 				},
 			},
 		},
@@ -1796,7 +1796,7 @@ func TestShouldWakeSandboxSpecFallback(t *testing.T) {
 	wakeRuleSpec := agentsv1alpha1.SandboxSpec{
 		AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
 			Resume: &agentsv1alpha1.ResumePolicy{
-				WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+				OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
 			},
 		},
 	}

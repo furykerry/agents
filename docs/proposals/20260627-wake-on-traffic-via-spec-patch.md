@@ -51,13 +51,13 @@ type ResumePolicy struct {
     // +optional
     WhenProbedScheduleTime *ProbedScheduleTimeRule `json:"whenProbedScheduleTime,omitempty"`
 
-    // WhenIngressTraffic resumes the sandbox when the sandbox-gateway receives
+    // OnIngressTraffic resumes the sandbox when the sandbox-gateway receives
     // inbound traffic addressed to it while it is paused. Unlike the probed
     // rules this one is event-driven: it needs no probe, it produces no
     // Status.Schedules entry, and it is executed by the sandbox-gateway rather
     // than by the sandbox controller.
     // +optional
-    WhenIngressTraffic *IngressTrafficRule `json:"whenIngressTraffic,omitempty"`
+    OnIngressTraffic *IngressTrafficRule `json:"onIngressTraffic,omitempty"`
 }
 
 // IngressTrafficRule defines the rule for resuming a paused sandbox when
@@ -86,18 +86,21 @@ YAML:
 spec:
   autoPausePolicy:
     resume:
-      whenIngressTraffic:
+      onIngressTraffic:
         pauseTimeout: 5m
 ```
 
 ### Naming
 
-`WhenIngressTraffic` continues the `When<signal>` shape of the sibling rules
-(`WhenProbedIdleState`, `WhenProbedScheduleTime`), and `Ingress` states the
-traffic direction that triggers the wake. Alternatives considered:
-`WhenInboundTraffic` (consistent with the gateway's inbound-authentication
-vocabulary, but less explicit about direction in a Kubernetes context),
-`WhenTrafficArrives` (verb phrase, breaks the sibling shape), and
+`OnIngressTraffic` uses the `On<event>` idiom (as in wake-on-LAN): the rule
+fires on an event, so the name needs no predicate. The probed sibling rules
+(`WhenProbedIdleState`, `WhenProbedScheduleTime`) keep `When<condition>`
+because they describe evaluated conditions, not events. `Ingress` states the
+traffic direction that triggers the wake, and the `Traffic` suffix is kept so
+the name cannot be misread as the Kubernetes `Ingress` resource. Alternatives
+considered: `WhenIngressTraffic` (missing a predicate — when ingress traffic
+*does what*?), `OnIngress` (ambiguous with the Ingress resource),
+`WhenIngressTrafficArrives` (complete sentence but verbose), and
 `WhenGatewayTraffic` (binds a specific component into the API contract).
 
 The rule is a struct rather than a bool because it carries `PauseTimeout`, the
@@ -106,14 +109,14 @@ restricting wake to specific ports or paths) without another API break.
 
 ### Why this rule must not activate the auto-pause controller
 
-`WhenIngressTraffic` lives under `AutoPausePolicy` but must not be treated as a
+`OnIngressTraffic` lives under `AutoPausePolicy` but must not be treated as a
 probe-driven policy:
 
 - **`checkTimers` guard.** The auto-pause proposal makes `checkTimers` skip the
   one-shot `Spec.PauseTime` auto-pause when `hasActiveAutoPausePolicy(box)` is
   true. That predicate must test only the probe-driven rules
   (`Pause.WhenProbedIdleState`, `Resume.WhenProbedScheduleTime`). If
-  `WhenIngressTraffic` counted as an active policy, every sandbox created with
+  `OnIngressTraffic` counted as an active policy, every sandbox created with
   E2B `autoResume: {"enabled": true}` would silently lose its `timeout`-based
   auto-pause. Wake-on-traffic complements that timer — the wake path itself
   re-arms `PauseTime` — it does not replace it.
@@ -148,7 +151,7 @@ Out-of-band enablement uses a direct spec patch:
 
 ```bash
 kubectl patch sandbox my-sbx --type=merge -p \
-  '{"spec":{"autoPausePolicy":{"resume":{"whenIngressTraffic":{"pauseTimeout":"5m"}}}}}'
+  '{"spec":{"autoPausePolicy":{"resume":{"onIngressTraffic":{"pauseTimeout":"5m"}}}}}'
 ```
 
 ## Control-Plane Wiring
@@ -178,7 +181,7 @@ one:
 
 ```go
 if p := box.Spec.AutoPausePolicy; p != nil && p.Resume != nil {
-    p.Resume.WhenIngressTraffic = nil
+    p.Resume.OnIngressTraffic = nil
     if p.Resume.WhenProbedScheduleTime == nil {
         p.Resume = nil
     }
@@ -194,7 +197,7 @@ the SandboxSet template or by an operator, not by a claim.
 ### Sandbox controller: `checkTimers`
 
 `hasActiveAutoPausePolicy` — the guard that suppresses the `Spec.PauseTime`
-timer — must ignore `WhenIngressTraffic`, for the reason given in
+timer — must ignore `OnIngressTraffic`, for the reason given in
 [Why this rule must not activate the auto-pause controller](#why-this-rule-must-not-activate-the-auto-pause-controller).
 This is the one cross-feature invariant that a future change to either feature
 must preserve.
@@ -308,7 +311,7 @@ No systemtoken, no HTTP call to sandbox-manager.
 
 ## Timeout Handling
 
-`WhenIngressTraffic.PauseTimeout` stores the auto-pause timeout to re-arm. When
+`OnIngressTraffic.PauseTimeout` stores the auto-pause timeout to re-arm. When
 the gateway wakes a sandbox:
 1. It reads `PauseTimeout` from the spec to determine the fresh `PauseTime`
 2. If the spec value is absent or non-positive, it falls back to the filter's
@@ -325,12 +328,12 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 
 | Area | File | Change |
 |------|------|--------|
-| API types | `api/v1alpha1/sandbox_types.go` | Add `ResumePolicy.WhenIngressTraffic` + `IngressTrafficRule` |
+| API types | `api/v1alpha1/sandbox_types.go` | Add `ResumePolicy.OnIngressTraffic` + `IngressTrafficRule` |
 | Read helpers | `pkg/utils/utils.go` | Add the two spec-read helpers shared by gateway, controller and route projection |
 | Generated output | `client/`, `config/crd/` | `make generate manifests` (never edited by hand) |
 | Route projection | `pkg/sandboxroute/route.go` | `WakeOnTraffic` derived from the helper |
 | Recycle | `pkg/controller/sandbox/core/recycle.go` | Clear the rule in `resetMetadataForPool` and prune empty parents |
-| Auto-pause guard | sandbox controller `checkTimers` | `hasActiveAutoPausePolicy` ignores `WhenIngressTraffic` |
+| Auto-pause guard | sandbox controller `checkTimers` | `hasActiveAutoPausePolicy` ignores `OnIngressTraffic` |
 | Infra setter | `pkg/sandbox-manager/infra/interface.go`, `infra/sandboxcr/sandbox.go` | Add `SetWakeOnIngressTraffic` |
 | E2B create | `pkg/servers/e2b/create.go` | Call the setter to express the wake configuration; drop the metadata `wake-timeout-seconds` override |
 | E2B model doc | `pkg/servers/e2b/models/sandbox.go` | `SandboxAutoResumeConfig` comment now refers to the spec field |
@@ -352,7 +355,7 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 - **Recycle** (`pkg/controller/sandbox/core/recycle_test.go`): cover a CR with
   the spec rule (alone, and combined with a probed rule); assert the reset and
   empty-parent pruning.
-- **`checkTimers` guard**: a sandbox whose only policy is `WhenIngressTraffic`
+- **`checkTimers` guard**: a sandbox whose only policy is `OnIngressTraffic`
   still auto-pauses at `PauseTime`; adding a probed rule suppresses the timer.
 - **Wake timeout resolution** (`pkg/sandbox-gateway/wake`): spec value,
   config default, and floor application.
@@ -360,7 +363,7 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 ### E2E
 
 `test/e2b/test_wake_on_traffic.py` keeps its flow and switches its assertions
-to `spec.autoPausePolicy.resume.whenIngressTraffic`, including the
+to `spec.autoPausePolicy.resume.onIngressTraffic`, including the
 persists-after-wake check.
 
 ## Implementation History
@@ -368,7 +371,7 @@ persists-after-wake check.
 - [x] 2026-06-27: Initial proposal — replace the systemtoken/HTTP wake path with
   a direct `sandboxcr.Sandbox.Resume()` call.
 - [x] 2026-08-28: Promote the wake configuration to
-  `Spec.AutoPausePolicy.Resume.WhenIngressTraffic`, and define the
+  `Spec.AutoPausePolicy.Resume.OnIngressTraffic`, and define the
   control-plane wiring (route projection, recycle reset, `checkTimers` guard,
   `infra.Sandbox` setter).
 - [ ] TODO: Community review and feedback.

@@ -412,7 +412,7 @@ func (r *SandboxRecycleControl) resetMetadataForPool(ctx context.Context, box *a
 	// an operator, not by a claim, so they stay. Empty parents are pruned
 	// to keep the pooled spec byte-identical to a fresh one.
 	if p := box.Spec.AutoPausePolicy; p != nil && p.Resume != nil {
-		p.Resume.WhenIngressTraffic = nil
+		p.Resume.OnIngressTraffic = nil
 		if p.Resume.WhenProbedScheduleTime == nil {
 			p.Resume = nil
 		}

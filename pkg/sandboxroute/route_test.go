@@ -182,7 +182,7 @@ func TestRouteFromSandboxDerivation(t *testing.T) {
 				sandbox := newSandbox(nil, nil)
 				sandbox.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
 					Resume: &agentsv1alpha1.ResumePolicy{
-						WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+						OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
 					},
 				}
 				return sandbox

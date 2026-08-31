@@ -1195,7 +1195,7 @@ func TestResetForPool(t *testing.T) {
 					PauseTime:    &now,
 					AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
 						Resume: &agentsv1alpha1.ResumePolicy{
-							WhenIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
+							OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{
 								PauseTimeout: &metav1.Duration{Duration: 300 * time.Second},
 							},
 						},
@@ -1234,7 +1234,7 @@ func TestResetForPool(t *testing.T) {
 					AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
 						Resume: &agentsv1alpha1.ResumePolicy{
 							WhenProbedScheduleTime: &agentsv1alpha1.ProbedScheduleTimeRule{},
-							WhenIngressTraffic:     &agentsv1alpha1.IngressTrafficRule{},
+							OnIngressTraffic:       &agentsv1alpha1.IngressTrafficRule{},
 						},
 					},
 				},
