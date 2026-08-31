@@ -358,8 +358,8 @@ type IngressTrafficRule struct {
 	// next auto-pause. It applies only to auto-pause sandboxes (those that
 	// already carry Spec.PauseTime); never-timeout and shutdown-only
 	// sandboxes keep their timeout mode unchanged.
-	// When absent or non-positive, the gateway's wake-timeout-seconds
-	// configuration (default 60s) is used.
+	// When absent or non-positive, a traffic wake does not re-arm auto-pause:
+	// the woken sandbox keeps running until it is paused or deleted again.
 	// +optional
 	PauseTimeout *metav1.Duration `json:"pauseTimeout,omitempty"`
 }

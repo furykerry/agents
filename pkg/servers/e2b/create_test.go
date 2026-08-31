@@ -991,17 +991,16 @@ func TestParseCreateSandboxRequest(t *testing.T) {
 
 func TestBasicSandboxCreateModifier(t *testing.T) {
 	tests := []struct {
-		name                   string
-		request                models.NewSandboxRequest
-		initialAnnotations     map[string]string
-		initialLabels          map[string]string
-		initialWakeRule        *agentsv1alpha1.IngressTrafficRule
-		maxTimeout             int
-		expectAnnotations      map[string]string
-		expectNoAnnotations    []string
-		expectLabels           map[string]string
-		expectWakeRule         bool
-		expectWakePauseTimeout time.Duration
+		name                string
+		request             models.NewSandboxRequest
+		initialAnnotations  map[string]string
+		initialLabels       map[string]string
+		initialWakeRule     *agentsv1alpha1.IngressTrafficRule
+		maxTimeout          int
+		expectAnnotations   map[string]string
+		expectNoAnnotations []string
+		expectLabels        map[string]string
+		expectWakeRule      bool
 	}{
 		{
 			name: "metadata propagated to annotations",
@@ -1038,19 +1037,20 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			expectLabels: map[string]string{"env": "test"},
 		},
 		{
-			name: "autoResume enabled sets wake rule",
+			// The wake rule is written without a PauseTimeout: a traffic wake
+			// re-arms auto-pause only when the spec sets one explicitly.
+			name: "autoResume enabled sets wake rule without pause timeout",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoPause:  true,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
 			},
-			maxTimeout:             3600,
-			expectWakeRule:         true,
-			expectWakePauseTimeout: 300 * time.Second,
+			maxTimeout:     3600,
+			expectWakeRule: true,
 		},
 		{
-			name: "autoResume enabled never-timeout leaves pause timeout unset",
+			name: "autoResume enabled never-timeout sets wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
@@ -1063,8 +1063,8 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 		},
 		{
 			// A recycled CR can still carry the wake rule of delivery A;
-			// delivery B's request decides the policy, so the stale timeout
-			// is replaced by the current request timeout.
+			// delivery B's request decides the policy, so the stale rule is
+			// replaced by a bare rule without a pause timeout.
 			name: "autoResume enabled overwrites stale inherited wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
@@ -1075,14 +1075,13 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			initialWakeRule: &agentsv1alpha1.IngressTrafficRule{
 				PauseTimeout: &metav1.Duration{Duration: 999 * time.Second},
 			},
-			maxTimeout:             3600,
-			expectWakeRule:         true,
-			expectWakePauseTimeout: 300 * time.Second,
+			maxTimeout:     3600,
+			expectWakeRule: true,
 		},
 		{
-			// Shutdown-only lifecycle: the re-armed pause timeout only feeds
-			// the fresh PauseTime of auto-pause sandboxes.
-			name: "autoResume enabled without auto-pause leaves pause timeout unset",
+			// Shutdown-only lifecycle: the wake rule applies regardless; the
+			// gateway never injects a PauseTime into non-auto-pause sandboxes.
+			name: "autoResume enabled without auto-pause sets wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
@@ -1171,7 +1170,10 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.expectWakeRule, utils.WakeOnIngressTrafficEnabled(mockSbx.Sandbox))
-			assert.Equal(t, tt.expectWakePauseTimeout, utils.WakeOnIngressTrafficPauseTimeout(mockSbx.Sandbox))
+			if tt.expectWakeRule {
+				assert.Zero(t, utils.WakeOnIngressTrafficPauseTimeout(mockSbx.Sandbox),
+					"the wake rule must carry no defaulted PauseTimeout")
+			}
 		})
 	}
 }

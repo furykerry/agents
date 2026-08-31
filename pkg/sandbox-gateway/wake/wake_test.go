@@ -160,51 +160,53 @@ func TestWake(t *testing.T) {
 	pauseTime := time.Now().Add(1 * time.Hour)
 
 	tests := []struct {
-		name           string
-		sandboxName    string
-		sandboxNS      string
-		wakeRule       *agentsv1alpha1.IngressTrafficRule
-		shutdownTime   *metav1.Time
-		pauseTime      *metav1.Time
-		defaultTimeout time.Duration
+		name         string
+		sandboxName  string
+		sandboxNS    string
+		wakeRule     *agentsv1alpha1.IngressTrafficRule
+		shutdownTime *metav1.Time
+		pauseTime    *metav1.Time
 		// wantPauseSeconds, when > 0, asserts the fresh PauseTime written by
 		// the wake is now + wantPauseSeconds (i.e. the resume timeout floor
 		// has been applied to the effective value).
 		wantPauseSeconds int
-		skipCreate       bool
-		simulateResume   bool
-		expectError      string
+		// wantNoPauseTime asserts the wake left no PauseTime behind, i.e.
+		// auto-pause was not re-armed (and the stale PauseTime was cleared).
+		wantNoPauseTime bool
+		skipCreate      bool
+		simulateResume  bool
+		expectError     string
 	}{
 		{
-			name:           "sandbox not found returns error",
-			sandboxName:    "nonexistent",
-			sandboxNS:      "default",
-			defaultTimeout: 60 * time.Second,
-			skipCreate:     true,
-			expectError:    "not found",
+			name:        "sandbox not found returns error",
+			sandboxName: "nonexistent",
+			sandboxNS:   "default",
+			skipCreate:  true,
+			expectError: "not found",
 		},
 		{
-			// Wake must reject a non-positive fallback timeout explicitly
-			// instead of relying on an instant context deadline.
-			name:           "non-positive default timeout rejected",
-			sandboxName:    "sbx-zero-timeout",
-			sandboxNS:      "default",
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 0,
-			expectError:    "must be positive",
+			// The rule carries no PauseTimeout and none is defaulted: the wake
+			// must clear the stale PauseTime so the controller does not
+			// re-pause immediately.
+			name:            "wake without rule pause timeout does not re-arm auto-pause",
+			sandboxName:     "sbx-no-rearm",
+			sandboxNS:       "default",
+			wakeRule:        &agentsv1alpha1.IngressTrafficRule{},
+			shutdownTime:    &metav1.Time{Time: shutdownTime},
+			pauseTime:       &metav1.Time{Time: pauseTime},
+			wantNoPauseTime: true,
+			simulateResume:  true,
 		},
 		{
-			name:           "successful wake with default timeout",
-			sandboxName:    "sbx-default",
-			sandboxNS:      "default",
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 60 * time.Second,
-			// 60s default is below the resume floor and must be raised.
-			wantPauseSeconds: 300,
-			simulateResume:   true,
-			expectError:      "",
+			// A sandbox without any wake rule behaves the same way: the wake
+			// (driven by the registry flag) does not re-arm auto-pause.
+			name:            "wake without wake rule does not re-arm auto-pause",
+			sandboxName:     "sbx-no-rule",
+			sandboxNS:       "default",
+			shutdownTime:    &metav1.Time{Time: shutdownTime},
+			pauseTime:       &metav1.Time{Time: pauseTime},
+			wantNoPauseTime: true,
+			simulateResume:  true,
 		},
 		{
 			name:        "wake with rule pause timeout below resume floor is raised to floor",
@@ -217,10 +219,8 @@ func TestWake(t *testing.T) {
 			},
 			shutdownTime:     &metav1.Time{Time: shutdownTime},
 			pauseTime:        &metav1.Time{Time: pauseTime},
-			defaultTimeout:   60 * time.Second,
 			wantPauseSeconds: 300,
 			simulateResume:   true,
-			expectError:      "",
 		},
 		{
 			name:        "wake with rule pause timeout above resume floor unchanged",
@@ -231,36 +231,20 @@ func TestWake(t *testing.T) {
 			},
 			shutdownTime:     &metav1.Time{Time: shutdownTime},
 			pauseTime:        &metav1.Time{Time: pauseTime},
-			defaultTimeout:   60 * time.Second,
 			wantPauseSeconds: 600,
 			simulateResume:   true,
-			expectError:      "",
 		},
 		{
-			name:        "non-positive rule pause timeout falls back to default",
+			name:        "non-positive rule pause timeout does not re-arm auto-pause",
 			sandboxName: "sbx-rule-non-positive",
 			sandboxNS:   "default",
 			wakeRule: &agentsv1alpha1.IngressTrafficRule{
 				PauseTimeout: &metav1.Duration{Duration: -5 * time.Second},
 			},
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 60 * time.Second,
-			simulateResume: true,
-			expectError:    "",
-		},
-		{
-			name:           "short default timeout still resumes",
-			sandboxName:    "sbx-short-timeout",
-			sandboxNS:      "default",
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      &metav1.Time{Time: pauseTime},
-			defaultTimeout: 30 * time.Second,
-			// The 30s wait deadline is raised to the resume floor before it
-			// is written as the fresh PauseTime.
-			wantPauseSeconds: 300,
-			simulateResume:   true,
-			expectError:      "",
+			shutdownTime:    &metav1.Time{Time: shutdownTime},
+			pauseTime:       &metav1.Time{Time: pauseTime},
+			wantNoPauseTime: true,
+			simulateResume:  true,
 		},
 		{
 			name:           "wake preserves nil ShutdownTime",
@@ -268,21 +252,18 @@ func TestWake(t *testing.T) {
 			sandboxNS:      "default",
 			shutdownTime:   nil,
 			pauseTime:      nil,
-			defaultTimeout: 30 * time.Second,
 			simulateResume: true,
-			expectError:    "",
 		},
 		{
 			// Shutdown-only sandbox (no PauseTime): wake must not inject a
 			// PauseTime that would convert it into auto-pause mode.
-			name:           "wake shutdown-only sandbox preserves nil PauseTime",
-			sandboxName:    "sbx-shutdown-only",
-			sandboxNS:      "default",
-			shutdownTime:   &metav1.Time{Time: shutdownTime},
-			pauseTime:      nil,
-			defaultTimeout: 30 * time.Second,
-			simulateResume: true,
-			expectError:    "",
+			name:            "wake shutdown-only sandbox preserves nil PauseTime",
+			sandboxName:     "sbx-shutdown-only",
+			sandboxNS:       "default",
+			shutdownTime:    &metav1.Time{Time: shutdownTime},
+			pauseTime:       nil,
+			wantNoPauseTime: true,
+			simulateResume:  true,
 		},
 	}
 
@@ -298,7 +279,7 @@ func TestWake(t *testing.T) {
 				waker := &Waker{cache: cacheProvider}
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
-				err = waker.Wake(ctx, tt.sandboxNS, tt.sandboxName, tt.defaultTimeout)
+				err = waker.Wake(ctx, tt.sandboxNS, tt.sandboxName)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
 				return
@@ -346,7 +327,7 @@ func TestWake(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 
-			err = waker.Wake(ctx, tt.sandboxNS, tt.sandboxName, tt.defaultTimeout)
+			err = waker.Wake(ctx, tt.sandboxNS, tt.sandboxName)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
@@ -375,6 +356,13 @@ func TestWake(t *testing.T) {
 			// Verify PauseTime is not injected for never-timeout or shutdown-only sandboxes
 			if tt.pauseTime == nil {
 				assert.Nil(t, updated.Spec.PauseTime, "PauseTime should not be injected for non-auto-pause sandboxes")
+			}
+
+			// Without a positive rule PauseTimeout the wake must not leave a
+			// PauseTime behind, otherwise the controller would re-pause the
+			// sandbox immediately.
+			if tt.wantNoPauseTime {
+				assert.Nil(t, updated.Spec.PauseTime, "wake without PauseTimeout must clear the stale PauseTime")
 			}
 
 			// Verify the fresh PauseTime carries the floored effective timeout

@@ -71,9 +71,9 @@ type IngressTrafficRule struct {
     // next auto-pause. It applies only to auto-pause sandboxes (those that
     // already carry Spec.PauseTime); never-timeout and shutdown-only
     // sandboxes keep their timeout mode unchanged.
-    // When absent or non-positive, the gateway's wake-timeout-seconds
-    // configuration (default 60s) is used. The effective value is still
-    // subject to the resume timeout floor
+    // When absent or non-positive, a traffic wake does not re-arm auto-pause:
+    // the woken sandbox keeps running until it is paused or deleted again.
+    // A positive value is still subject to the resume timeout floor
     // (timeout.DefaultMinResumeTimeoutSeconds).
     // +optional
     PauseTimeout *metav1.Duration `json:"pauseTimeout,omitempty"`
@@ -205,8 +205,8 @@ must preserve.
 ### Admission
 
 No webhook is added. `metav1.Duration` typing rejects malformed values at
-admission time, and a non-positive `PauseTimeout` degrades to the configured
-gateway default at read time.
+admission time, and a non-positive `PauseTimeout` is treated as unset: the
+wake does not re-arm auto-pause.
 
 ### sandbox-manager write path (API -> Infra)
 
@@ -216,9 +216,9 @@ interface gains one narrow setter, implemented by `sandboxcr.Sandbox` next to
 
 ```go
 // SetWakeOnIngressTraffic enables or clears the wake-on-ingress-traffic resume
-// rule. A non-positive pauseTimeout leaves the re-armed timeout unset, so the
-// gateway default applies.
-SetWakeOnIngressTraffic(enabled bool, pauseTimeout time.Duration)
+// rule. The rule carries no PauseTimeout: a traffic wake re-arms auto-pause
+// only when the spec sets one explicitly.
+SetWakeOnIngressTraffic(enabled bool)
 ```
 
 `basicSandboxCreateModifier` (`pkg/servers/e2b/create.go`) calls the setter to
@@ -227,16 +227,12 @@ removed along with it.
 
 ```go
 if request.AutoResume.Enabled {
-    var pauseTimeout time.Duration
-    // The re-armed timeout only feeds the fresh PauseTime the gateway writes
-    // for auto-pause sandboxes; shutdown-only and never-timeout sandboxes
-    // never carry a PauseTime, so it stays unset for them.
-    if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
-        pauseTimeout = time.Duration(request.Timeout) * time.Second
-    }
-    sbx.SetWakeOnIngressTraffic(true, pauseTimeout)
+    // The wake rule carries no default PauseTimeout: a traffic wake re-arms
+    // auto-pause only when the rule explicitly sets one, otherwise the
+    // sandbox keeps running after the wake.
+    sbx.SetWakeOnIngressTraffic(true)
 } else {
-    sbx.SetWakeOnIngressTraffic(false, 0)
+    sbx.SetWakeOnIngressTraffic(false)
 }
 ```
 
@@ -252,10 +248,14 @@ The E2B surface does not change: `autoResume: {"enabled": true}` (Python SDK
   to `utils.WakeOnIngressTrafficEnabled`. It stays the informer-cache
   fallback that covers the window between a spec patch and the gateway
   controller reconciling the change into the route registry.
-- `wake.Waker.wakeInternal` resolves the re-armed timeout through
-  `utils.WakeOnIngressTrafficPauseTimeout`, falling back to the
-  `defaultWakeTimeout` passed by the filter. The auto-pause/never-timeout/
-  shutdown-only branching and the resume timeout floor are unchanged.
+- `wake.Waker.Wake` resolves the re-armed timeout through
+  `utils.WakeOnIngressTrafficPauseTimeout`. A positive value re-arms
+  auto-pause (with the resume timeout floor applied); an unset value wakes
+  without re-arming — the stale `PauseTime` is cleared so the controller does
+  not re-pause immediately, and `ShutdownTime` moves to the forever retention
+  horizon as in the re-arm case. The filter's `wake-timeout-seconds` config
+  only bounds the wake operation itself. The auto-pause/never-timeout/
+  shutdown-only branching is unchanged.
 - `filter.shouldWakeSandbox` is unchanged apart from the renamed fallback call;
   `Config.EnableWakeOnTraffic` remains the listener-level kill switch.
 
@@ -314,10 +314,12 @@ No systemtoken, no HTTP call to sandbox-manager.
 `OnIngressTraffic.PauseTimeout` stores the auto-pause timeout to re-arm. When
 the gateway wakes a sandbox:
 1. It reads `PauseTimeout` from the spec to determine the fresh `PauseTime`
-2. If the spec value is absent or non-positive, it falls back to the filter's
-   `WakeTimeoutSeconds` config default (60s)
-3. The resume timeout floor (`timeout.DefaultMinResumeTimeoutSeconds`) is applied
-   so the fresh `PauseTime` cannot expire while the sandbox is still resuming
+2. If the spec value is absent or non-positive, the wake does not re-arm
+   auto-pause: the stale `PauseTime` is cleared and the sandbox keeps running
+   until it is paused or deleted again
+3. For a positive value, the resume timeout floor
+   (`timeout.DefaultMinResumeTimeoutSeconds`) is applied so the fresh
+   `PauseTime` cannot expire while the sandbox is still resuming
 4. The timeout is passed as `ResumeOptions.Timeout.PauseTime`, which is written atomically
    with `Spec.Paused = false` inside `retryUpdate` — closing the auto-pause race
 
@@ -349,16 +351,17 @@ Only auto-pause sandboxes (those already carrying `Spec.PauseTime`) get a fresh
 - **Route projection** (`pkg/sandboxroute/route_test.go`): cover wake cases
   driven by the spec rule, asserting `Route.WakeOnTraffic`.
 - **E2B create modifier** (`pkg/servers/e2b/create_test.go`): extend the existing
-  `autoResume` table — enabled + `autoPause` sets `PauseTimeout` from `timeout`;
-  enabled + never-timeout / shutdown-only leaves it unset; disabled clears the
-  rule; a recycled CR carrying a previous delivery's rule ends up with none.
+  `autoResume` table — enabled sets the wake rule without any `PauseTimeout`
+  (never defaulted), including a recycled CR carrying a stale rule; disabled
+  clears the rule.
 - **Recycle** (`pkg/controller/sandbox/core/recycle_test.go`): cover a CR with
   the spec rule (alone, and combined with a probed rule); assert the reset and
   empty-parent pruning.
 - **`checkTimers` guard**: a sandbox whose only policy is `OnIngressTraffic`
   still auto-pauses at `PauseTime`; adding a probed rule suppresses the timer.
-- **Wake timeout resolution** (`pkg/sandbox-gateway/wake`): spec value,
-  config default, and floor application.
+- **Wake timeout resolution** (`pkg/sandbox-gateway/wake`): positive spec
+  value (including floor application) re-arms auto-pause; an unset or
+  non-positive value wakes without re-arming and clears the stale `PauseTime`.
 
 ### E2E
 

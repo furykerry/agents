@@ -161,14 +161,13 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 			// processing. wakeAndContinue will call Continue or
 			// SendLocalReply when the wake completes.
 			//
-			// This context carries the sole wake deadline; Wake receives
-			// waitTimeout only as the annotation-fallback default.
+			// This context carries the sole wake deadline.
 			waitTimeout := time.Duration(f.config.GetWakeTimeoutSeconds()) * time.Second
 			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 			f.mu.Lock()
 			f.cancel = cancel
 			f.mu.Unlock()
-			go f.wakeAndContinue(ctx, waker, route.Namespace, route.Name, sandboxID, sandboxPort, waitTimeout)
+			go f.wakeAndContinue(ctx, waker, route.Namespace, route.Name, sandboxID, sandboxPort)
 			return api.Running
 		}
 		// Not running and not wakeable -> 502 (existing behavior)
@@ -351,7 +350,6 @@ func (f *sandboxFilter) wakeAndContinue(
 	waker *wake.Waker,
 	namespace, name, sandboxID string,
 	sandboxPort int,
-	waitTimeout time.Duration,
 ) {
 	log := logger.With(zap.String("sandboxID", sandboxID))
 
@@ -365,7 +363,7 @@ func (f *sandboxFilter) wakeAndContinue(
 		}
 	}()
 
-	err := waker.Wake(ctx, namespace, name, waitTimeout)
+	err := waker.Wake(ctx, namespace, name)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// Filter was destroyed; do nothing.

@@ -429,19 +429,14 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 		annotations[models.ExtensionKeyReturnPodIP] = agentsv1alpha1.True
 	}
 	if request.AutoResume.Enabled {
-		// The re-armed pause timeout only feeds the fresh PauseTime that the
-		// gateway wake path writes for auto-pause sandboxes; shutdown-only
-		// and never-timeout sandboxes never carry a PauseTime, so leave it
-		// unset for them.
-		var pauseTimeout time.Duration
-		if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
-			pauseTimeout = time.Duration(request.Timeout) * time.Second
-		}
-		sbx.SetWakeOnIngressTraffic(true, pauseTimeout)
+		// The wake rule carries no default PauseTimeout: a traffic wake
+		// re-arms auto-pause only when the rule explicitly sets one,
+		// otherwise the sandbox keeps running after the wake.
+		sbx.SetWakeOnIngressTraffic(true)
 	} else {
 		// Called on both branches so a claimed CR that still holds a
 		// previous delivery's rule is reset even if its recycle was skipped.
-		sbx.SetWakeOnIngressTraffic(false, 0)
+		sbx.SetWakeOnIngressTraffic(false)
 	}
 	sbx.SetAnnotations(annotations)
 
