@@ -1089,6 +1089,7 @@ func TestCalculateScaleDelta(t *testing.T) {
 		statusReplicas int32
 		failed         int
 		timedOut       int
+		dirtyCreates   int
 		maxUnavailable *intstrutil.IntOrString
 		expectedDelta  int
 		description    string
@@ -1282,6 +1283,44 @@ func TestCalculateScaleDelta(t *testing.T) {
 			expectedDelta:  2,
 			description:    "only failed and timed-out blockers reduce the budget",
 		},
+		{
+			name:           "dirty scale-up creations reduce budget",
+			replicas:       10,
+			statusReplicas: 2,
+			dirtyCreates:   2,
+			maxUnavailable: intOrStringPtr(intstrutil.FromInt(3)),
+			expectedDelta:  1,
+			description:    "unobserved creations charge the budget (3-2=1)",
+		},
+		{
+			name:           "dirty scale-up creations exhaust budget",
+			replicas:       10,
+			statusReplicas: 2,
+			dirtyCreates:   2,
+			maxUnavailable: intOrStringPtr(intstrutil.FromInt(2)),
+			expectedDelta:  0,
+			description:    "no headroom left when dirty creations equal MaxUnavailable",
+		},
+		{
+			name:           "dirty creations combined with startup blockers",
+			replicas:       10,
+			statusReplicas: 4,
+			failed:         1,
+			timedOut:       1,
+			dirtyCreates:   2,
+			maxUnavailable: intOrStringPtr(intstrutil.FromInt(6)),
+			expectedDelta:  2,
+			description:    "failed, timed-out, and dirty creations all charge the budget (6-4=2)",
+		},
+		{
+			name:           "healthy creating free while dirty creations charged",
+			replicas:       10,
+			statusReplicas: 5,
+			dirtyCreates:   1,
+			maxUnavailable: intOrStringPtr(intstrutil.FromInt(3)),
+			expectedDelta:  2,
+			description:    "observed healthy Creating sandboxes stay free; only dirty creations charge (3-1=2)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1297,7 +1336,7 @@ func TestCalculateScaleDelta(t *testing.T) {
 				Replicas: tt.statusReplicas,
 			}
 
-			delta := calculateScaleDelta(t.Context(), sbs, status, startupBlockers{Failed: tt.failed, TimedOut: tt.timedOut})
+			delta := calculateScaleDelta(t.Context(), sbs, status, startupBlockers{Failed: tt.failed, TimedOut: tt.timedOut, DirtyCreates: tt.dirtyCreates})
 			assert.Equal(t, tt.expectedDelta, delta, tt.description)
 
 			// Additional validations

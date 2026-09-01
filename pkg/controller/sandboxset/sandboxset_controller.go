@@ -145,6 +145,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	calculateSandboxSetStatusFromGroup(ctx, newStatus, groups, dirtyScaleUp)
 	now := time.Now()
 	blockers, scalingLimitedTimeoutAfter := r.calculateScalingLimited(ctx, sbs, newStatus, groups, now)
+	blockers.DirtyCreates = len(dirtyScaleUp[expectations.Create])
 	requeueAfter = minimumPositiveDuration(scaleUpTimeoutAfter, scaleDownTimeoutAfter, scalingLimitedTimeoutAfter)
 	// Set selector in status for scale subresource
 	if newStatus.Selector == "" {
@@ -166,7 +167,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	start := time.Now()
 	delta := calculateScaleDelta(ctx, sbs, newStatus, blockers)
 	log.Info("performing scale", "expect", sbs.Spec.Replicas, "actual", newStatus.Replicas,
-		"available", newStatus.AvailableReplicas, "failed", blockers.Failed, "timedOut", blockers.TimedOut, "delta", delta)
+		"available", newStatus.AvailableReplicas, "failed", blockers.Failed, "timedOut", blockers.TimedOut,
+		"dirtyCreates", blockers.DirtyCreates, "delta", delta)
 	if delta > 0 {
 		err = r.scaleUp(ctx, delta, sbs, newStatus.UpdateRevision)
 	} else if delta < 0 {
@@ -349,11 +351,10 @@ func compareScaleDownPriority(a, b *agentsv1alpha1.Sandbox) int {
 // MaxUnavailable limit. Returns a positive value for scale up, negative for
 // scale down, 0 for no scaling needed.
 //
-// The scale-up budget is charged only by startup blockers (failed sandboxes
-// plus Creating/ResourcePending sandboxes past the pending timeout). Healthy
-// Creating sandboxes and dirty creates from the expectation cache do not
-// consume the budget, so an empty or fast-ramping pool can scale up at the
-// configured concurrency.
+// The scale-up budget is charged by startup blockers: failed sandboxes,
+// Creating/ResourcePending sandboxes past the pending timeout, and dirty
+// creates issued but not yet observed by the cache. Healthy observed Creating
+// sandboxes do not consume the budget.
 func calculateScaleDelta(ctx context.Context, sbs *agentsv1alpha1.SandboxSet, newStatus *agentsv1alpha1.SandboxSetStatus, blockers startupBlockers) int {
 	delta := int(sbs.Spec.Replicas - newStatus.Replicas)
 	// scale down
@@ -366,9 +367,9 @@ func calculateScaleDelta(ctx context.Context, sbs *agentsv1alpha1.SandboxSet, ne
 	// rate; the startup-budget condition in scaling_limited.go uses observed
 	// replicas separately for its own accounting.
 	scaleMaxUnavailable := resolveMaxUnavailable(ctx, sbs.Spec.ScaleStrategy.MaxUnavailable, sbs.Spec.Replicas)
-	// Subtract sandboxes that are blocking startup. Only failed sandboxes and
-	// those stuck in Creating/ResourcePending past the pending timeout count;
-	// healthy in-flight creations do not reduce headroom.
+	// Subtract sandboxes blocking startup plus unobserved dirty creates. Dirty
+	// creates keep the budget conservative until the cache confirms them as
+	// healthy Creating sandboxes, which release their slot.
 	scaleMaxUnavailable -= blockers.total()
 	// Ignore negative values.
 	scaleMaxUnavailable = max(scaleMaxUnavailable, 0)

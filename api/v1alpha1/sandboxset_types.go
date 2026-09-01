@@ -142,12 +142,13 @@ type SandboxSetScaleStrategy struct {
 	// rounded up against spec.replicas. If unset or invalid, the controller uses
 	// the base (equivalent to 100%, i.e. no cap). Scale-down is unaffected.
 	//
-	// The physical scale-up budget is charged only by startup blockers:
-	// sandboxes whose Ready condition is False with reason PodCreateFailed or
-	// StartContainerFailed, and sandboxes stuck in Creating/ResourcePending past
-	// the configured --max-pending-timeout. Healthy Creating sandboxes and
-	// outstanding create RPCs that are not yet observed by the controller
-	// (dirtyScaleUp) do NOT count against the budget.
+	// The physical scale-up budget is charged by startup blockers: sandboxes
+	// whose Ready condition is False with reason PodCreateFailed or
+	// StartContainerFailed, sandboxes stuck in Creating/ResourcePending past the
+	// configured --max-pending-timeout, and sandbox creations that have been
+	// issued but are not yet observed by the controller (they release their slot
+	// once observed as healthy Creating sandboxes). Healthy observed Creating
+	// sandboxes do NOT count against the budget.
 	//
 	// The ScalingLimited condition becomes True with reason
 	// StartupBudgetExhausted when failed plus pending-timeout sandboxes exhaust
