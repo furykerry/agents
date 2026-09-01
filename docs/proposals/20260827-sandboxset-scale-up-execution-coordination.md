@@ -180,21 +180,12 @@ Only `ScalingLimited` is persisted as an aggregate condition.
 
 ### SandboxSet Creation Limit
 
-SandboxSet limits new creations using the standard unavailable replica count:
+SandboxSet limits new creations using a startup-failure budget rather than the standard
+unavailable replica count. Only sandboxes that are genuinely blocking startup occupy the
+scale-up budget:
 
 ```text
-unavailable = status.replicas - status.availableReplicas
-```
-
-Every non-Available Sandbox, including healthy in-flight creations and `dirtyCreate`, occupies the
-scale-up budget until it becomes Available. Existing expectation accounting continues to govern
-outstanding create RPCs.
-
-`ScalingLimited` uses a separate, stricter startup-blocker count:
-
-```text
-blockedStartups = countStartupBlocked(groups, maxPendingTimeout, now)
-                = failed + timeout
+charged = failed + timeout
 ```
 
 `failed` counts Sandboxes with `Ready=False` and reason `PodCreateFailed` or
@@ -206,15 +197,22 @@ of whether the sampled container state is `CrashLoopBackOff` or briefly `Running
 Waiting reasons do not cause an immediate failure. `timeout` counts Sandboxes still in `Creating`
 with reason `ResourcePending` whose `creationTimestamp + maxPendingTimeout` has already elapsed.
 
+Healthy in-flight creations and `dirtyCreate` (create RPCs observed by the expectation cache but
+not yet by the informer) do NOT count against the physical scale-up budget. Existing expectation
+accounting continues to govern outstanding create RPCs.
+
+`ScalingLimited` uses the same resolved value as the startup budget and becomes True when
+`failed + timeout` exhausts it.
+
 SandboxSet resolves `spec.scaleStrategy.maxUnavailable` solely to limit physical create operations.
-An absent or invalid value falls back to `100%` (no cap; equivalent to `spec.replicas`). Absolute values are used directly; percentages are
-rounded up and resolved against `spec.replicas` so headroom is derived from the declared target
-rather than the momentary observed pool size:
+An absent or invalid value falls back to `100%` (no cap; equivalent to `spec.replicas`). Absolute
+values are used directly; percentages are rounded up and resolved against `spec.replicas` so
+headroom is derived from the declared target rather than the momentary observed pool size:
 
 ```text
 maxConcurrent = resolve(spec.scaleStrategy.maxUnavailable,
                         spec.replicas, default=100%)
-createHeadroom = max(maxConcurrent - unavailable, 0)
+createHeadroom = max(maxConcurrent - charged, 0)
 ```
 
 SandboxSet creates toward `spec.replicas` while `createHeadroom > 0`. Reaching the limit stops new
