@@ -59,7 +59,7 @@ The checker follows only `config/crd/kustomization.yaml`. In check mode, it repo
 | Source resource | Chart target |
 | --- | --- |
 | `checkpoints`, `commits`, `poolautoscalers`, `sandboxclaims`, `sandboxes`, `sandboxsets`, `sandboxtemplates`, `sandboxupdateops` | `versions/kruise-agents-sandbox-controller/next/crds/agents.kruise.io_<name>.yaml` |
-| `trafficpolicies` | `versions/kruise-agents-sandbox-manager/next/files/agentio/trafficpolicy-crd.yaml` |
+| `trafficpolicies`, `globaltrafficpolicies`, `securityprofiles`, `globalsecurityprofiles` | `versions/kruise-agents-sandbox-manager/next/files/agentio/<singular>-crd.yaml` |
 
 If a future resource in `config/crd/kustomization.yaml` has no chart mapping, the checker exits `3` and blocks every `--apply-crds` copy, including mapped resources. Never manually perform a partial copy while that block exists, and never treat it as a time-pressure fast path: ask the user whether the charts should ship the new resource. Add an explicit `CHART_SPEC` mapping and update its test coverage in a separate reviewed skill change before retrying; do not make that policy decision inside a chart-sync PR. `--component` does not bypass this safeguard.
 
@@ -84,7 +84,7 @@ Hand-merge the rendered `MutatingWebhookConfiguration` and `ValidatingWebhookCon
 
 Hand-splice the `v-pa.kb.io` validating webhook into `versions/kruise-agents-sandbox-controller/next/templates/webhook.yaml` as well, keeping the chart service name and the templated namespace. Its entry must stay source-equivalent: `path: /validate-poolautoscaler`, `failurePolicy: Fail`, operations `CREATE` and `UPDATE`, `apiGroups: agents.kruise.io`, `apiVersions: v1alpha1`, resource `poolautoscalers`, `admissionReviewVersions` `v1` and `v1beta1`, and `sideEffects: None`.
 
-After rendering the controller chart, compare the allowed webhook entries (`md-sbs.kb.io`, `md-sbt.kb.io`, `v-sbs.kb.io`, `v-sbt.kb.io`, `v-pa.kb.io`, `v-pod-delete.kb.io`, `v-pod-eviction.kb.io`, and `v-suo.kb.io`) in both outputs. For every entry, rules, paths, policies, selectors, admission-review versions, and side effects must match. For every chart entry, `{{ include "sandbox-controller.namespace" . }}` resolves to `sandbox-system` and is equivalent to the source fixed namespace. The seven source-patched entries must also retain their patched service names. The source overlay does not patch `v-pa.kb.io`'s service reference, so retain the controller chart service name for that entry instead.
+After rendering the controller chart, compare the allowed webhook entries (`md-sbs.kb.io`, `md-sbt.kb.io`, `v-sbs.kb.io`, `v-sbt.kb.io`, `v-pa.kb.io`, `v-pod-delete.kb.io`, `v-pod-eviction.kb.io`, and `v-suo.kb.io`) in both outputs. For every entry, rules, paths, policies, selectors, admission-review versions, and side effects must match. For every chart entry, `{{ include "sandbox-controller.namespace" . }}` resolves to `sandbox-system` and is equivalent to the source fixed namespace. All eight source-patched entries must also retain their patched service names.
 
 ```bash
 helm template sandbox-controller \

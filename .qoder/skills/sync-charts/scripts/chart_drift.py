@@ -54,6 +54,18 @@ CHART_SPEC = {
         "manager",
         Path("versions/kruise-agents-sandbox-manager/next/files/agentio/trafficpolicy-crd.yaml"),
     ),
+    "agents.kruise.io_globaltrafficpolicies.yaml": Target(
+        "manager",
+        Path("versions/kruise-agents-sandbox-manager/next/files/agentio/globaltrafficpolicy-crd.yaml"),
+    ),
+    "agents.kruise.io_securityprofiles.yaml": Target(
+        "manager",
+        Path("versions/kruise-agents-sandbox-manager/next/files/agentio/securityprofile-crd.yaml"),
+    ),
+    "agents.kruise.io_globalsecurityprofiles.yaml": Target(
+        "manager",
+        Path("versions/kruise-agents-sandbox-manager/next/files/agentio/globalsecurityprofile-crd.yaml"),
+    ),
 }
 
 

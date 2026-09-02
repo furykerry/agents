@@ -370,6 +370,67 @@ class ChartDriftTest(unittest.TestCase):
                 result.stdout,
             )
 
+    def test_copies_securityprofiles_crd_to_manager_chart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            agents_repo = root / "agents"
+            charts_repo = root / "charts"
+            source = (
+                agents_repo
+                / "config"
+                / "crd"
+                / "bases"
+                / "agents.kruise.io_securityprofiles.yaml"
+            )
+            destination = (
+                charts_repo
+                / "versions"
+                / "kruise-agents-sandbox-manager"
+                / "next"
+                / "files"
+                / "agentio"
+                / "securityprofile-crd.yaml"
+            )
+            source.parent.mkdir(parents=True)
+            (charts_repo / "versions").mkdir(parents=True)
+            (agents_repo / "config" / "crd" / "kustomization.yaml").write_text(
+                "resources:\n"
+                "- bases/agents.kruise.io_securityprofiles.yaml\n",
+                encoding="utf-8",
+            )
+            source.write_bytes(
+                b"apiVersion: apiextensions.k8s.io/v1\n"
+                b"kind: CustomResourceDefinition\n"
+                b"metadata:\n"
+                b"  name: securityprofiles.agents.kruise.io\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--agents-repo",
+                    str(agents_repo),
+                    "--charts-repo",
+                    str(charts_repo),
+                    "--aspect",
+                    "crd",
+                    "--apply-crds",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            self.assertIn(
+                "SYNCED crd manager "
+                "versions/kruise-agents-sandbox-manager/next/files/agentio/"
+                "securityprofile-crd.yaml",
+                result.stdout,
+            )
+
     def test_documents_identity_resource_synchronization(self) -> None:
         content = SKILL.read_text(encoding="utf-8")
 
