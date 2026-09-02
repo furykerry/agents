@@ -6,7 +6,6 @@ Close the API-admission gaps identified for probe names and PoolAutoscaler confi
 
 ## Scope
 
-- Remove the obsolete `AnnotationWakeOnTraffic` and `AnnotationWakeTimeoutSeconds` constants and their `AnnotationsClearedOnRecycle` entries. Do not retain compatibility cleanup for historical annotations.
 - Declare `SandboxSpec.Probes`, `SandboxSetSpec.Probes`, and `SandboxTemplateSpec.Probes` as map lists keyed by `name`.
 - Declare `PoolAutoscalerSpec.CronPolicies` and `PoolAutoscalerStatus.AppliedCronPolicies` as map lists keyed by `name`.
 - Make `PoolAutoscaler.Spec` required by removing its optional marker and `omitempty` JSON tag.
@@ -14,12 +13,8 @@ Close the API-admission gaps identified for probe names and PoolAutoscaler confi
 
 ## Generated Artifacts
 
-The change is made only in `api/v1alpha1` hand-written types. `make generate manifests` regenerates DeepCopy methods, typed clients, and CRD schemas. Generated files are not edited manually.
+The change is made only in `api/v1alpha1` hand-written types. `make generate manifests` regenerates DeepCopy methods and CRD schemas. Generated files are not edited manually.
 
 ## Validation
 
-Add a focused API-package test covering the maximum valid probe-name length and invalid suffix shapes through the condition-type construction invariant. Run `make generate manifests`, inspect the generated CRD schema for required `spec`, list-map keys, and probe-name validation, then run the affected Go tests, formatting checks, and `go vet`.
-
-## Delivery
-
-Use a new worktree to preserve the source repository's existing untracked files. Create a signed local Git commit containing the implementation and regenerated outputs.
+Run `make generate manifests`, inspect the generated CRD schema for required `spec`, list-map keys, and probe-name validation, then run formatting and focused package validation.
