@@ -12,6 +12,7 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 CHECKER = SKILL_DIR / "scripts" / "chart_drift.py"
+SKILL = SKILL_DIR / "SKILL.md"
 
 
 class ChartDriftTest(unittest.TestCase):
@@ -368,6 +369,44 @@ class ChartDriftTest(unittest.TestCase):
                 "agents.kruise.io_poolautoscalers.yaml",
                 result.stdout,
             )
+
+    def test_documents_identity_resource_synchronization(self) -> None:
+        content = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("## Identity Resources", content)
+        self.assertIn("> /tmp/manager-chart.yaml", content)
+        for requirement in (
+            "controller `templates/rbac.yaml`",
+            "manager `templates/rbac.yaml`",
+            "preserve `{{ ... }}`",
+            "excluding `app.kubernetes.io/managed-by: kustomize`",
+            "chart-managed standard `app.kubernetes.io/*` keys win",
+            "roleRef `apiGroup` and `kind`",
+            "chart's existing namespace helper",
+            "source role counterpart",
+            "source-rendered binding in the table",
+            "exactly one chart counterpart of the same kind",
+            "roleRef targets by kind",
+            "namePrefix: sandbox-",
+            "namespace: sandbox-system",
+            "pair bindings by kind",
+            "config/sandbox-gateway/jwt-auth-rbac.yaml",
+            "config/sandbox-gateway-runtime-mtls/rbac.yaml",
+            "Identity resources require manual source-to-rendered review.",
+        ):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, content)
+        for source in (
+            "config/rbac/service_account.yaml",
+            "config/rbac/role_binding.yaml",
+            "config/rbac/leader_election_role_binding.yaml",
+            "config/sandbox-manager/serviceaccount.yaml",
+            "config/sandbox-manager/rbac.yaml",
+            "config/sandbox-gateway/serviceaccount.yaml",
+            "config/sandbox-gateway/rbac.yaml",
+        ):
+            with self.subTest(source=source):
+                self.assertIn(source, content)
 
 
 if __name__ == "__main__":

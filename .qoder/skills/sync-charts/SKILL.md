@@ -103,7 +103,48 @@ Compare source `rules:` blocks and add missing rules only:
 | `config/sandbox-manager/rbac.yaml` | manager `templates/rbac.yaml` | manager ClusterRole and secret Role |
 | `config/sandbox-gateway/rbac.yaml` | manager `templates/rbac.yaml` | gateway ClusterRole |
 
-Do not replace ServiceAccounts, bindings, metadata, or Helm conditionals. Do not remove source-independent chart permissions. Leave commented metrics/sample RBAC and `config/sandbox-gateway/jwt-auth-rbac.yaml` untouched.
+## Identity Resources
+
+Synchronize ServiceAccounts and RoleBinding/ClusterRoleBinding resources by hand-splicing source-defined behavior into the existing Helm templates. Do not byte-copy these resources: preserve `{{ ... }}`, chart names, the chart's existing namespace helper, chart-only labels and annotations, conditional blocks, and source-independent resources. Do not compare literal chart names: Helm generates chart names for every target. For controller sources, `config/default/kustomization.yaml` also applies `namePrefix: sandbox-` and `namespace: sandbox-system`; raw `subjects[].namespace: system` is a pre-render input, so inspect subjects only in the rendered default overlay.
+
+| Source | Helm target | Fields to synchronize |
+| --- | --- | --- |
+| `config/rbac/service_account.yaml` | controller `templates/rbac.yaml` | controller ServiceAccount presence and source-defined labels |
+| `config/rbac/role_binding.yaml` | controller `templates/rbac.yaml` | controller ClusterRoleBinding and RoleBinding `roleRef` and `subjects` |
+| `config/rbac/leader_election_role_binding.yaml` | controller `templates/rbac.yaml` | leader-election RoleBinding `roleRef` and `subjects` |
+| `config/sandbox-manager/serviceaccount.yaml` | manager `templates/rbac.yaml` | manager ServiceAccount presence, source-defined labels, and `automountServiceAccountToken` |
+| `config/sandbox-manager/rbac.yaml` | manager `templates/rbac.yaml` | manager ClusterRoleBinding and secrets RoleBinding `roleRef` and `subjects` |
+| `config/sandbox-gateway/serviceaccount.yaml` | manager `templates/rbac.yaml` | gateway ServiceAccount presence and source-defined labels |
+| `config/sandbox-gateway/rbac.yaml` | manager `templates/rbac.yaml` | gateway ClusterRoleBinding `roleRef` and `subjects` |
+
+Merge source labels additively, excluding `app.kubernetes.io/managed-by: kustomize`; that Kustomize bookkeeping label must not enter a Helm template. Retain chart-managed labels and annotations, so do not require literal equality of complete label sets. On conflict, chart-managed standard `app.kubernetes.io/*` keys win; add only source labels that the chart does not already manage. Keep the chart's name and namespace helpers in ServiceAccount references.
+
+After rendering with `--namespace sandbox-system`, verify that each synchronized ServiceAccount exists and that every synchronized non-templated field, including `automountServiceAccountToken`, is source-equivalent. Each source-rendered binding in the table must have exactly one chart counterpart of the same kind; a missing or duplicate counterpart is drift. For every matched binding, compare roleRef `apiGroup` and `kind`, then verify that its rendered role name identifies the rendered source role counterpart. The controller ClusterRoleBinding and RoleBinding share names, so pair bindings by kind before comparing; a name match alone does not identify the counterpart. Pair roleRef targets by kind as well, because the source ClusterRole and Role share their rendered name. Each `subjects` entry for a ServiceAccount must retain `kind: ServiceAccount`, name the rendered chart ServiceAccount, and resolve through the chart's existing namespace helper to `sandbox-system`. Do not remove source-independent chart permissions, commented metrics/sample RBAC, or resources from optional overlays that are not included by `config/sandbox-gateway/kustomization.yaml`: `config/sandbox-gateway/jwt-auth-rbac.yaml` and `config/sandbox-gateway-runtime-mtls/rbac.yaml` are not drift when absent from the base rendered source.
+
+Render the source resources and compare them against their chart output:
+
+```bash
+./bin/kustomize build config/default > /tmp/agents-default.yaml
+./bin/kustomize build config/sandbox-manager > /tmp/agents-manager.yaml
+./bin/kustomize build config/sandbox-gateway > /tmp/agents-gateway.yaml
+helm template sandbox-controller \
+  "$CHARTS_REPO/versions/kruise-agents-sandbox-controller/next" \
+  --namespace sandbox-system > /tmp/controller-chart.yaml
+helm template sandbox-manager \
+  "$CHARTS_REPO/versions/kruise-agents-sandbox-manager/next" \
+  --namespace sandbox-system \
+  --set ingress.className=nginx --set e2b.adminApiKey=x > /tmp/manager-chart.yaml
+```
+
+Before accepting `/tmp/manager-chart.yaml`, inspect the manager templates for gateway conditionals. If a chart value gates gateway identity resources, render again with that value enabled and use that output for the gateway comparison; never treat a value-gated absence as parity.
+
+```bash
+yq 'select(.kind == "ServiceAccount" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding")' /tmp/agents-default.yaml
+yq 'select(.kind == "ServiceAccount" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding")' /tmp/agents-manager.yaml
+yq 'select(.kind == "ServiceAccount" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding")' /tmp/agents-gateway.yaml
+yq 'select(.kind == "ServiceAccount" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding")' /tmp/controller-chart.yaml
+yq 'select(.kind == "ServiceAccount" or .kind == "RoleBinding" or .kind == "ClusterRoleBinding")' /tmp/manager-chart.yaml
+```
 
 ## Verification and PR
 
@@ -123,6 +164,6 @@ yamllint -c "$CHARTS_REPO/.github/configs/lintconf.yaml" \
 git -C "$CHARTS_REPO" status --short
 ```
 
-The checker verifies CRDs only; webhook parity requires the rendered comparison above and RBAC splices require manual source-to-template review. The final checker run must report no `DRIFT` and exit `0`, which requires every source CRD to be mapped and byte-identical; any `UNMAPPED` exit `3` marks a blocking unmapped resource, not a successful sync.
+The checker verifies CRDs only; webhook parity requires the rendered comparison above and RBAC splices require manual source-to-template review. Identity resources require manual source-to-rendered review. The final checker run must report no `DRIFT` and exit `0`, which requires every source CRD to be mapped and byte-identical; any `UNMAPPED` exit `3` marks a blocking unmapped resource, not a successful sync.
 
 Commit with sign-off and create a charts PR that states the agents source SHA, the initial/final drift output, and CRD-upgrade impact. Do not change chart versions or release pointers in this PR.
