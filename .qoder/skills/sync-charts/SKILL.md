@@ -1,6 +1,6 @@
 ---
 name: sync-charts
-description: Use when syncing OpenKruise Agents controller or sandbox-manager manifests from config/ into the openkruise/charts next directories, or when investigating drift between those sources.
+description: Use when syncing OpenKruise Agents controller, sandbox-manager, or sandbox-gateway manifests from config/ into the openkruise/charts next directories, or when investigating drift between those sources.
 ---
 
 # Sync Agents Charts
@@ -71,6 +71,50 @@ python3 .qoder/skills/sync-charts/scripts/chart_drift.py \
 python3 .qoder/skills/sync-charts/scripts/chart_drift.py \
   --charts-repo "$CHARTS_REPO" --aspect crd
 ```
+
+## Deployment Manifests
+
+Run the read-only manifests checker. There is no apply mode for manifests; chart templates are always edited by hand:
+
+```bash
+python3 .qoder/skills/sync-charts/scripts/chart_drift.py \
+  --charts-repo "$CHARTS_REPO" --aspect manifests --component all
+```
+
+Narrow the scope with `--component controller|manager|gateway` or with `--kinds`, a comma-separated subset of `Service,ConfigMap,Ingress,Secret`:
+
+```bash
+python3 .qoder/skills/sync-charts/scripts/chart_drift.py \
+  --charts-repo "$CHARTS_REPO" --aspect manifests --component gateway
+python3 .qoder/skills/sync-charts/scripts/chart_drift.py \
+  --charts-repo "$CHARTS_REPO" --aspect manifests --kinds Service,ConfigMap
+```
+
+The checker renders each source overlay with kustomize (`./bin/kustomize`, falling back to `kubectl kustomize` when the binary is absent) and each mapped chart template with `helm template <release> <chart-dir> --namespace sandbox-system -s templates/<file>.yaml`; the manager chart additionally renders with `--set ingress.className=nginx --set e2b.adminApiKey=x`. The manager chart hosts both manager and gateway resources, and its `templates/service.yaml` is multi-document: document 0 is the manager Service and document 1 is the gateway Service.
+
+| Component | Source overlay | Kind | Source name | Chart template |
+| --- | --- | --- | --- | --- |
+| controller | `config/manager` | Service | `controller-manager-webhook-service` | controller `templates/service.yaml` |
+| manager | `config/sandbox-manager` | Service | `sandbox-manager` | manager `templates/service.yaml` |
+| manager | `config/sandbox-manager` | Ingress | `sandbox-manager` | manager `templates/ingress.yaml` |
+| manager | `config/sandbox-manager` | Secret | `e2b-key-store` | manager `templates/secret.yaml` |
+| manager | `config/sandbox-manager` | ConfigMap | `sandbox-manager-envoy-config` | manager `templates/envoy-config.yaml` |
+| gateway | `config/sandbox-gateway` | Service | `sandbox-gateway` | manager `templates/service.yaml` (document 1) |
+| gateway | `config/sandbox-gateway` | ConfigMap | `envoy-config` | manager `templates/gateway-envoy-config.yaml` |
+
+The comparison never checks `metadata.name` or `metadata.namespace`, and it ignores chart-managed metadata (`helm.sh/chart`, `helm.sh/resource-policy`, and the `app.kubernetes.io/{managed-by,instance,version,part-of,component}` labels); differences in those show up as `HELM_ONLY`. Deployment manifests, Namespace templates, and the controller's `configuration` ConfigMap are out of scope by design: Deployments are not synchronized by this checker, the controller chart provides no configmap template, and namespaces belong to the deployment environment. RBAC, ServiceAccount, and webhook documents from the same overlays are handled by the webhook, RBAC, and identity sections instead and are silently skipped here.
+
+Output categories:
+
+- `OK` — every compared field is source-equivalent.
+- `DRIFT` — source-defined behavior is missing or different in the chart; hand-splice it into the template.
+- `HELM_ONLY` — chart-only content driven by chart values or Helm rendering (extra ports, extra labels); usually retain it.
+- `MISSING` — a mapped chart template file does not exist.
+- `UNMAPPED` — a source manifest of a managed kind in a rendered overlay has no mapping entry.
+
+Exit codes match the CRD aspect: `0` clean, `1` drift or missing, `2` configuration or render error, `3` unmapped source manifest.
+
+Fix every `DRIFT` by hand-editing the mapped chart template: add or correct only the source-defined fields the finding names while preserving `{{ ... }}`, chart helpers, conditionals, and chart-only additions. `HELM_ONLY` findings describe intentional chart behavior; review them but do not delete chart content to silence them. `MISSING` and `UNMAPPED` are blockers, exactly like the CRD unmapped block: ask the user whether the charts should ship the affected resource, and add the explicit `MANIFEST_SPEC` mapping plus its test coverage in a separate reviewed skill change rather than deciding policy inside a chart-sync PR.
 
 ## Webhook and RBAC Splices
 
@@ -164,6 +208,6 @@ yamllint -c "$CHARTS_REPO/.github/configs/lintconf.yaml" \
 git -C "$CHARTS_REPO" status --short
 ```
 
-The checker verifies CRDs only; webhook parity requires the rendered comparison above and RBAC splices require manual source-to-template review. Identity resources require manual source-to-rendered review. The final checker run must report no `DRIFT` and exit `0`, which requires every source CRD to be mapped and byte-identical; any `UNMAPPED` exit `3` marks a blocking unmapped resource, not a successful sync.
+The CRD and deployment-manifest checks are automated; webhook parity requires the rendered comparison above and RBAC splices require manual source-to-template review. Identity resources require manual source-to-rendered review. The final CRD checker run must report no `DRIFT` and exit `0`, which requires every source CRD to be mapped and byte-identical; any `UNMAPPED` exit `3` marks a blocking unmapped resource, not a successful sync. The final manifests run must report no `DRIFT`, `MISSING`, or `UNMAPPED`; `HELM_ONLY` findings may legitimately remain.
 
 Commit with sign-off and create a charts PR that states the agents source SHA, the initial/final drift output, and CRD-upgrade impact. Do not change chart versions or release pointers in this PR.
