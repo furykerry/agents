@@ -269,6 +269,7 @@ def check_manifests(args: argparse.Namespace) -> int:
     has_drift = False
     has_unmapped = False
     chart_renders: dict[tuple[str, Path], list[dict]] = {}
+    template_texts: dict[tuple[str, Path], str] = {}
 
     for target in targets:
         source = source_docs[target.overlay].get((target.kind, target.name))
@@ -300,7 +301,12 @@ def check_manifests(args: argparse.Namespace) -> int:
             has_drift = True
             continue
         findings = compare_manifest(source, chart)
-        if any(finding.category == "DRIFT" for finding in findings):
+        if key not in template_texts:
+            template_texts[key] = (charts_repo / "versions" / target.chart / "next" / target.template).read_text(
+                encoding="utf-8"
+            )
+        mark_templated(findings, template_texts[key])
+        if any(finding.category in ("DRIFT", "TEMPLATED") for finding in findings):
             has_drift = True
         if findings:
             for finding in findings:
@@ -353,6 +359,32 @@ def compare_manifest(source: dict, chart: dict) -> list[Finding]:
     }
     comparators[source.get("kind", "")](source, chart, findings)
     return findings
+
+
+def leaf_key(path: str) -> str:
+    key = path.rsplit(".", 1)[-1]
+    return key.split("[", 1)[0].strip()
+
+
+def is_value_difference(detail: str) -> bool:
+    return " != chart " in detail or detail == "source and chart differ" or detail.startswith("source item ")
+
+
+def template_renders_key(template_text: str, key: str) -> bool:
+    direct = re.search(r"^[ \t]*" + re.escape(key) + r"[ \t]*:[^\n]*\{\{", template_text, re.MULTILINE)
+    if direct:
+        return True
+    return re.search(r"\{\{-?[ \t]*range[^\n]*\." + re.escape(key) + r"[ \t]*-?\}\}", template_text) is not None
+
+
+def mark_templated(findings: list[Finding], template_text: str) -> None:
+    for finding in findings:
+        if finding.category != "DRIFT" or not is_value_difference(finding.detail):
+            continue
+        if not template_renders_key(template_text, leaf_key(finding.path)):
+            continue
+        finding.category = "TEMPLATED"
+        finding.detail += "; chart renders this field through a template"
 
 
 def compare_metadata(source: dict, chart: dict, findings: list[Finding]) -> None:
@@ -435,35 +467,34 @@ def compare_service(source: dict, chart: dict, findings: list[Finding]) -> None:
             Finding("DRIFT", "spec.type", f"source {source_spec.get('type')!r} != chart {chart_spec.get('type')!r}")
         )
     source_ports = source_spec.get("ports") or []
-    chart_ports = {port.get("port"): port for port in (chart_spec.get("ports") or [])}
-    for port in source_ports:
-        number = port.get("port")
-        match = chart_ports.get(number)
-        if match is None:
-            findings.append(Finding("DRIFT", f"spec.ports[{number}]", "missing in chart"))
-            continue
-        if port.get("targetPort") is not None and match.get("targetPort") != port.get("targetPort"):
-            findings.append(
-                Finding(
-                    "DRIFT",
-                    f"spec.ports[{number}].targetPort",
-                    f"source {port.get('targetPort')!r} != chart {match.get('targetPort')!r}",
+    chart_ports = chart_spec.get("ports") or []
+    for index, port in enumerate(source_ports):
+        if index >= len(chart_ports):
+            findings.append(Finding("DRIFT", f"spec.ports[{index}]", "missing in chart"))
+            break
+        match = chart_ports[index]
+        for field in ("port", "targetPort"):
+            if port.get(field) is not None and port.get(field) != match.get(field):
+                findings.append(
+                    Finding(
+                        "DRIFT",
+                        f"spec.ports[{index}].{field}",
+                        f"source {port.get(field)!r} != chart {match.get(field)!r}",
+                    )
                 )
-            )
         source_protocol = port.get("protocol") or "TCP"
         chart_protocol = match.get("protocol") or "TCP"
         if source_protocol != chart_protocol:
             findings.append(
                 Finding(
                     "DRIFT",
-                    f"spec.ports[{number}].protocol",
+                    f"spec.ports[{index}].protocol",
                     f"source {source_protocol!r} != chart {chart_protocol!r}",
                 )
             )
-    source_numbers = {port.get("port") for port in source_ports}
-    for number in chart_ports:
-        if number not in source_numbers:
-            findings.append(Finding("HELM_ONLY", f"spec.ports[{number}]", "chart-only port"))
+    for index in range(len(source_ports), len(chart_ports)):
+        number = chart_ports[index].get("port")
+        findings.append(Finding("HELM_ONLY", f"spec.ports[{index}]", f"chart-only port {number}"))
 
 
 def compare_configmap(source: dict, chart: dict, findings: list[Finding]) -> None:
