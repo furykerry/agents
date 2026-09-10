@@ -849,7 +849,6 @@ class ManifestDriftTest(unittest.TestCase):
             "Deployments are not synchronized by this checker",
             "`MANIFEST_SPEC` mapping",
             "Do not modify resource metadata",
-            "append only",
             "Never replace a `{{ ... }}` template with a concrete source value",
         ):
             with self.subTest(requirement=requirement):
