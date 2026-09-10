@@ -114,7 +114,13 @@ Output categories:
 
 Exit codes match the CRD aspect: `0` clean, `1` drift or missing, `2` configuration or render error, `3` unmapped source manifest.
 
-Fix every `DRIFT` by hand-editing the mapped chart template: add or correct only the source-defined fields the finding names while preserving `{{ ... }}`, chart helpers, conditionals, and chart-only additions. `HELM_ONLY` findings describe intentional chart behavior; review them but do not delete chart content to silence them. `MISSING` and `UNMAPPED` are blockers, exactly like the CRD unmapped block: ask the user whether the charts should ship the affected resource, and add the explicit `MANIFEST_SPEC` mapping plus its test coverage in a separate reviewed skill change rather than deciding policy inside a chart-sync PR.
+Sync policy when splicing a `DRIFT` finding into a chart template:
+
+- **Do not modify resource metadata.** `metadata.labels`, `metadata.annotations`, and every other metadata field are left as the chart renders them; do not copy source metadata into the template.
+- **Spec: append only.** On `spec` (and on `data` / `stringData` for ConfigMap and Secret), only add a new field or append a new entry to a list or map. Do not change the value of an existing field.
+- **Never replace a `{{ ... }}` template with a concrete source value.** When the chart already renders a field through a template expression, keep the template even when the source carries a concrete value; do not substitute the source literal in its place.
+
+Preserve every `{{ ... }}`, chart helper, conditional, and chart-only addition while applying a fix. `HELM_ONLY` findings describe intentional chart behavior; review them but do not delete chart content to silence them. `MISSING` and `UNMAPPED` are blockers, exactly like the CRD unmapped block: ask the user whether the charts should ship the affected resource, and add the explicit `MANIFEST_SPEC` mapping plus its test coverage in a separate reviewed skill change rather than deciding policy inside a chart-sync PR.
 
 ## Webhook and RBAC Splices
 

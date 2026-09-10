@@ -848,6 +848,9 @@ class ManifestDriftTest(unittest.TestCase):
             "`UNMAPPED` — a source manifest of a managed kind",
             "Deployments are not synchronized by this checker",
             "`MANIFEST_SPEC` mapping",
+            "Do not modify resource metadata",
+            "append only",
+            "Never replace a `{{ ... }}` template with a concrete source value",
         ):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, content)
