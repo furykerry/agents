@@ -311,9 +311,20 @@ func (c *Cache) Run(ctx context.Context) error {
 		}
 	}()
 	cache := c.mgr.GetCache()
-	if cache != nil && !cache.WaitForCacheSync(ctx) {
-		cancel()
-		return fmt.Errorf("timed out waiting for caches to sync")
+	if cache != nil {
+		// Force the Pod informer to start eagerly. No controller watches Pods, so
+		// left alone it is created lazily on the first pod read — after this sync
+		// gate — meaning the first TrafficPolicy reconcile would block on a full
+		// pod list-and-sync, and a missing pods RBAC grant would surface only then
+		// instead of as a startup failure.
+		if _, err := cache.GetInformer(ctx, &corev1.Pod{}); err != nil {
+			cancel()
+			return fmt.Errorf("failed to start pod informer: %w", err)
+		}
+		if !cache.WaitForCacheSync(ctx) {
+			cancel()
+			return fmt.Errorf("timed out waiting for caches to sync")
+		}
 	}
 	if c.health != nil {
 		c.health.MarkSynced()

@@ -67,6 +67,10 @@ func trafficPolicySelectorForPod(sandbox *agentsv1alpha1.Sandbox, pod *corev1.Po
 		agentsv1alpha1.LabelSandboxUID: string(sandbox.UID),
 	}}
 	if pod != nil {
+		// Presence, not value, is the test: byUID carries sandbox.UID, so a stale
+		// terminating pod left by a prior same-name Sandbox still resolves to the
+		// current UID, whereas comparing the label value would fall back to the
+		// name selector and transiently match the old pod.
 		if _, ok := pod.Labels[agentsv1alpha1.LabelSandboxUID]; ok {
 			return byUID
 		}
@@ -174,13 +178,17 @@ func (s *Sandbox) CreateNetworkPolicy(ctx context.Context, netConfig infra.Sandb
 
 	allowCIDRs, allowDomains := network.SplitAllowOut(netConfig.AllowOut)
 
-	selector, err := s.trafficPolicySelector(ctx, k8sClient)
-	if err != nil {
-		return err
-	}
-
-	tp := buildTrafficPolicy(allowCIDRs, allowDomains, netConfig.DenyOut, namespace, sandboxID, s.Sandbox, selector)
+	tp := buildTrafficPolicy(allowCIDRs, allowDomains, netConfig.DenyOut, namespace, sandboxID, s.Sandbox, metav1.LabelSelector{})
 	if tp != nil {
+		// Resolve the selector only when there is a policy to write: doing so reads
+		// the pod, and that read must not be able to fail a call that ends up with
+		// nothing to select for.
+		selector, err := s.trafficPolicySelector(ctx, k8sClient)
+		if err != nil {
+			return err
+		}
+		tp.Spec.Selector = selector
+
 		if err := k8sClient.Create(ctx, tp); err != nil {
 			log.Error(err, "failed to create TrafficPolicy for sandbox")
 			return fmt.Errorf("failed to create TrafficPolicy: %w", err)
@@ -209,12 +217,17 @@ func (s *Sandbox) UpdateNetworkPolicy(ctx context.Context, netConfig infra.Sandb
 		return fmt.Errorf("failed to list TrafficPolicies: %w", err)
 	}
 
-	selector, err := s.trafficPolicySelector(ctx, k8sClient)
-	if err != nil {
-		return err
+	newTP := buildTrafficPolicy(allowCIDRs, allowDomains, netConfig.DenyOut, namespace, sandboxID, s.Sandbox, metav1.LabelSelector{})
+	if newTP != nil {
+		// Resolve the selector only when there is a policy to write. The delete
+		// branch below does not use it, so a transient pod-read failure must not
+		// block removing a TrafficPolicy whose rules have all been cleared.
+		selector, err := s.trafficPolicySelector(ctx, k8sClient)
+		if err != nil {
+			return err
+		}
+		newTP.Spec.Selector = selector
 	}
-
-	newTP := buildTrafficPolicy(allowCIDRs, allowDomains, netConfig.DenyOut, namespace, sandboxID, s.Sandbox, selector)
 
 	if newTP == nil {
 		// No network rules needed, delete existing CRs
