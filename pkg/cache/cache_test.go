@@ -1627,3 +1627,14 @@ func TestCache_GetCache_ReturnsManagerCache(t *testing.T) {
 	require.Equal(t, c.GetMockManager().GetCache(), c.GetCache(),
 		"GetCache must return the underlying manager's cache")
 }
+
+// TestCache_Run_PreWarmsPodInformer covers the Run startup path: it forces the
+// Pod informer to exist via GetInformer before WaitForCacheSync, so the informer
+// is part of the startup sync gate rather than created lazily on the first pod
+// read. The mock manager's cache stubs both calls as no-ops, so Run must succeed.
+func TestCache_Run_PreWarmsPodInformer(t *testing.T) {
+	c, _, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Run(t.Context()))
+}

@@ -17,14 +17,20 @@ limitations under the License.
 package sandboxcr
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
@@ -796,4 +802,74 @@ func TestUpdateNetworkPolicy_RecomputesStaleSelector(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, []string{"1.2.3.4/32"}, result.AllowOut)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, result.DenyOut)
+}
+
+// podGetErrProvider is a cache.Provider test double whose GetClient returns a
+// client that fails every Pod Get with a non-NotFound error, driving the
+// TrafficPolicy selector's pod read into its error path. The embedded Provider
+// is nil: Create/UpdateNetworkPolicy only ever call GetClient on it.
+type podGetErrProvider struct {
+	cache.Provider
+	client ctrlclient.Client
+}
+
+func (p podGetErrProvider) GetClient() ctrlclient.Client { return p.client }
+
+// newPodGetErrClient builds a fake client wired with the cache's field indexes
+// (so a TrafficPolicy List still succeeds) whose Get fails for Pods only.
+func newPodGetErrClient(t *testing.T) ctrlclient.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, agentsv1alpha1.AddToScheme(scheme))
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	for _, idx := range cache.GetIndexFuncs() {
+		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
+	}
+	return builder.WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, c ctrlclient.WithWatch, key ctrlclient.ObjectKey, obj ctrlclient.Object, opts ...ctrlclient.GetOption) error {
+			if _, isPod := obj.(*corev1.Pod); isPod {
+				return fmt.Errorf("injected pod get failure")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+}
+
+// TestTrafficPolicySelector_PodGetError covers the non-NotFound branch: a pod
+// read that fails for any other reason must surface as an error rather than
+// silently falling back to a selector that may match nothing.
+func TestTrafficPolicySelector_PodGetError(t *testing.T) {
+	sbx := &Sandbox{Sandbox: createTestSandbox("selector-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true)}
+
+	_, err := sbx.trafficPolicySelector(t.Context(), newPodGetErrClient(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
+}
+
+// TestCreateNetworkPolicy_PodGetError covers CreateNetworkPolicy aborting when
+// the selector's pod read fails: the error propagates and no TrafficPolicy write
+// is attempted.
+func TestCreateNetworkPolicy_PodGetError(t *testing.T) {
+	sbx := &Sandbox{
+		Sandbox: createTestSandbox("create-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true),
+		Cache:   podGetErrProvider{client: newPodGetErrClient(t)},
+	}
+
+	err := sbx.CreateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{AllowOut: []string{"1.2.3.4"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
+}
+
+// TestUpdateNetworkPolicy_PodGetError covers UpdateNetworkPolicy aborting when
+// the selector's pod read fails, after the existing-policy List has succeeded.
+func TestUpdateNetworkPolicy_PodGetError(t *testing.T) {
+	sbx := &Sandbox{
+		Sandbox: createTestSandbox("update-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true),
+		Cache:   podGetErrProvider{client: newPodGetErrClient(t)},
+	}
+
+	err := sbx.UpdateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{AllowOut: []string{"1.2.3.4"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
 }
