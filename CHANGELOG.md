@@ -1,5 +1,162 @@
 # Change Log
 
+## v0.6.0-alpha4
+
+> Change log since v0.3.0
+
+Version range: v0.3.0 → v0.6.0-alpha4
+
+---
+
+## 1. Features
+
+### 1.1 Security Enhancement
+
+**Ingress & Egress Control**
+- Introduced `TrafficPolicy`, `GlobalTrafficPolicy`, and `SecurityProfile` CRDs to drive sandbox ingress and egress control, covering MCP tool access control, L7 network rules, header manipulation, token transformation, and hardened CRD admission validation ([#397](https://github.com/openkruise/agents/pull/397), [#433](https://github.com/openkruise/agents/pull/433), [#445](https://github.com/openkruise/agents/pull/445), [#448](https://github.com/openkruise/agents/pull/448), [#483](https://github.com/openkruise/agents/pull/483), [#494](https://github.com/openkruise/agents/pull/494), [#521](https://github.com/openkruise/agents/pull/521), [#588](https://github.com/openkruise/agents/pull/588), [#610](https://github.com/openkruise/agents/pull/610), [#615](https://github.com/openkruise/agents/pull/615), [#614](https://github.com/openkruise/agents/pull/614), [#838](https://github.com/openkruise/agents/pull/838), [#829](https://github.com/openkruise/agents/pull/829), [#859](https://github.com/openkruise/agents/pull/859), [#745](https://github.com/openkruise/agents/pull/745), [#746](https://github.com/openkruise/agents/pull/746), [#915](https://github.com/openkruise/agents/pull/915), [#919](https://github.com/openkruise/agents/pull/919), [#930](https://github.com/openkruise/agents/pull/930)).
+- The gateway now verifies JWTs with optional runtime mTLS, aligns traffic tokens with the E2B SDK, rotates traffic access tokens, and masks access tokens in route logs and debug endpoints ([#561](https://github.com/openkruise/agents/pull/561), [#648](https://github.com/openkruise/agents/pull/648), [#689](https://github.com/openkruise/agents/pull/689), [#742](https://github.com/openkruise/agents/pull/742), [#607](https://github.com/openkruise/agents/pull/607)).
+
+**Identity & Token Framework**
+- Introduced a FeatureGate-controlled Security Identity Provider that issues and propagates tokens across the whole sandbox lifecycle — at claim and clone time, after resume, and before CSI re-mount — with proactive token refresh, identity propagation to checkpoints, and security metadata sourced from sandbox annotations instead of the create request ([#324](https://github.com/openkruise/agents/pull/324), [#450](https://github.com/openkruise/agents/pull/450), [#460](https://github.com/openkruise/agents/pull/460), [#463](https://github.com/openkruise/agents/pull/463), [#469](https://github.com/openkruise/agents/pull/469), [#488](https://github.com/openkruise/agents/pull/488), [#642](https://github.com/openkruise/agents/pull/642), [#671](https://github.com/openkruise/agents/pull/671), [#633](https://github.com/openkruise/agents/pull/633), [#637](https://github.com/openkruise/agents/pull/637), [#638](https://github.com/openkruise/agents/pull/638), [#639](https://github.com/openkruise/agents/pull/639), [#475](https://github.com/openkruise/agents/pull/475), [#632](https://github.com/openkruise/agents/pull/632), [#630](https://github.com/openkruise/agents/pull/630), [#501](https://github.com/openkruise/agents/pull/501)).
+
+**TLS & Runtime Transport**
+- TLS-capable sandboxes now serve CSI mounts and the `/init` handshake over HTTPS, with CA bundles injected into all containers, tokens delivered over the resolved runtime transport, and upgrade hooks secured by TLS ([#478](https://github.com/openkruise/agents/pull/478), [#552](https://github.com/openkruise/agents/pull/552), [#700](https://github.com/openkruise/agents/pull/700), [#720](https://github.com/openkruise/agents/pull/720), [#702](https://github.com/openkruise/agents/pull/702), [#729](https://github.com/openkruise/agents/pull/729), [#734](https://github.com/openkruise/agents/pull/734), [#752](https://github.com/openkruise/agents/pull/752), [#886](https://github.com/openkruise/agents/pull/886), [#797](https://github.com/openkruise/agents/pull/797)).
+- Added memberlist encryption and peer mTLS for the Manager and Gateway control plane ([#967](https://github.com/openkruise/agents/pull/967)).
+
+### 1.2 Operations Enhancement
+
+**Checkpoint, Pause/Resume & Commit**
+- Introduced the sandbox checkpoint lifecycle with filesystem checkpoints (`PersistentContents`), selectable checkpoint labels, and a `CheckpointRestore` upgrade strategy ([#508](https://github.com/openkruise/agents/pull/508), [#674](https://github.com/openkruise/agents/pull/674), [#712](https://github.com/openkruise/agents/pull/712), [#714](https://github.com/openkruise/agents/pull/714), [#670](https://github.com/openkruise/agents/pull/670)).
+- Matured pause/resume: a selectable `PauseStrategy` (Stop / Snapshot / CloudDisk) exposed on `SandboxSet`, atomic resume with clearer errors, events and conditions for post-resume re-initialization, and pause that waits for active checkpoints ([#713](https://github.com/openkruise/agents/pull/713), [#774](https://github.com/openkruise/agents/pull/774), [#839](https://github.com/openkruise/agents/pull/839), [#435](https://github.com/openkruise/agents/pull/435), [#424](https://github.com/openkruise/agents/pull/424), [#416](https://github.com/openkruise/agents/pull/416), [#913](https://github.com/openkruise/agents/pull/913)).
+- Introduced the `Commit` CRD with a controller that snapshots and pushes sandbox images via nerdctl ([#502](https://github.com/openkruise/agents/pull/502), [#533](https://github.com/openkruise/agents/pull/533), [#608](https://github.com/openkruise/agents/pull/608), [#595](https://github.com/openkruise/agents/pull/595)).
+
+**Upgrade & In-Place Update**
+- Claimed and paused sandboxes can now be batch-upgraded via `SandboxUpdateOps` with a two-phase flow, eligibility filtering, and resume that continues from the previously failed step ([#710](https://github.com/openkruise/agents/pull/710), [#750](https://github.com/openkruise/agents/pull/750), [#785](https://github.com/openkruise/agents/pull/785), [#482](https://github.com/openkruise/agents/pull/482), [#531](https://github.com/openkruise/agents/pull/531), [#553](https://github.com/openkruise/agents/pull/553), [#511](https://github.com/openkruise/agents/pull/511), [#447](https://github.com/openkruise/agents/pull/447)).
+- CPU and memory can be resized in place when claiming warm-pool sandboxes, preserving system-injected fields and init-container consistency ([#519](https://github.com/openkruise/agents/pull/519), [#462](https://github.com/openkruise/agents/pull/462), [#537](https://github.com/openkruise/agents/pull/537), [#538](https://github.com/openkruise/agents/pull/538), [#513](https://github.com/openkruise/agents/pull/513), [#716](https://github.com/openkruise/agents/pull/716), [#470](https://github.com/openkruise/agents/pull/470)).
+
+**Observability & Events**
+- Added abnormal-container and duration metrics, lifecycle events and conditions for pod creation failures and controller/manager lifecycles, and moved metric cleanup off the reconcile hot path ([#452](https://github.com/openkruise/agents/pull/452), [#591](https://github.com/openkruise/agents/pull/591), [#461](https://github.com/openkruise/agents/pull/461), [#626](https://github.com/openkruise/agents/pull/626), [#603](https://github.com/openkruise/agents/pull/603), [#658](https://github.com/openkruise/agents/pull/658)).
+- Reduced proxy and infra log volume, and added an optional dedicated E2B observability listener ([#579](https://github.com/openkruise/agents/pull/579), [#858](https://github.com/openkruise/agents/pull/858)).
+
+**Controller & SandboxSet**
+- `SandboxSet` improvements: auto-creation of `SandboxTemplate`, a legacy revision hash that prevents sandbox recreation on upgrade, a startup-failure budget for `maxUnavailable`, and priority-based scale-down ([#396](https://github.com/openkruise/agents/pull/396), [#514](https://github.com/openkruise/agents/pull/514), [#910](https://github.com/openkruise/agents/pull/910), [#803](https://github.com/openkruise/agents/pull/803)).
+- Sandbox lifecycle hardening: a lazy finalizer added on pause and removed on resume, rejection of leftover pods from a previous same-name sandbox, and status persisted during the Pending phase ([#646](https://github.com/openkruise/agents/pull/646), [#757](https://github.com/openkruise/agents/pull/757), [#455](https://github.com/openkruise/agents/pull/455)).
+- Sandbox claims gained an effective batch-size flag, namespace scoping, and propagation of designated claim annotations into the pod template ([#656](https://github.com/openkruise/agents/pull/656), [#824](https://github.com/openkruise/agents/pull/824), [#667](https://github.com/openkruise/agents/pull/667)).
+- Added the `okactl` CLI for sandbox operations and multi-arch image publishing ([#497](https://github.com/openkruise/agents/pull/497), [#545](https://github.com/openkruise/agents/pull/545)).
+
+**Performance & Caching**
+- Reduced hot-path cost and memory across claim, checkpoint, and gateway paths via informer-driven refresh, active-sandbox counting, and definitive cache-miss handling ([#421](https://github.com/openkruise/agents/pull/421), [#517](https://github.com/openkruise/agents/pull/517), [#423](https://github.com/openkruise/agents/pull/423), [#522](https://github.com/openkruise/agents/pull/522), [#442](https://github.com/openkruise/agents/pull/442), [#751](https://github.com/openkruise/agents/pull/751), [#730](https://github.com/openkruise/agents/pull/730), [#724](https://github.com/openkruise/agents/pull/724)).
+
+**E2B Compatibility**
+- Aligned with the E2B SDK: Claude Code support, pod-IP metadata, API key encoding for E2B ≥ v2.25.0, named cloned sandboxes, dynamically resolved sandbox domains, and an unlimited default create-server timeout ([#415](https://github.com/openkruise/agents/pull/415), [#436](https://github.com/openkruise/agents/pull/436), [#473](https://github.com/openkruise/agents/pull/473), [#385](https://github.com/openkruise/agents/pull/385), [#649](https://github.com/openkruise/agents/pull/649), [#484](https://github.com/openkruise/agents/pull/484)).
+- Added the Volume and Network APIs, dimension-aware API key quota, and a secret-to-MySQL API key migration script ([#580](https://github.com/openkruise/agents/pull/580), [#596](https://github.com/openkruise/agents/pull/596), [#616](https://github.com/openkruise/agents/pull/616), [#565](https://github.com/openkruise/agents/pull/565), [#309](https://github.com/openkruise/agents/pull/309)).
+
+**Storage & Runtime**
+- Added RRSA-based storage authentication for on-demand CSI mounts, an agent-runtime client with a CSI mount API, atomic filesystem operations, and a storage CLI binary ([#568](https://github.com/openkruise/agents/pull/568), [#685](https://github.com/openkruise/agents/pull/685), [#723](https://github.com/openkruise/agents/pull/723), [#539](https://github.com/openkruise/agents/pull/539)).
+
+**Miscellaneous**
+- Implemented short and stable sandbox IDs that stay unique across lifecycle operations ([#686](https://github.com/openkruise/agents/pull/686), [#766](https://github.com/openkruise/agents/pull/766)).
+- Clone failures are retried, sidecar injection moved into pod generation, postStart hooks are merged deterministically, and a `sync-charts` skill keeps the Helm charts in sync with controller and manager manifests ([#437](https://github.com/openkruise/agents/pull/437), [#530](https://github.com/openkruise/agents/pull/530), [#542](https://github.com/openkruise/agents/pull/542), [#520](https://github.com/openkruise/agents/pull/520), [#555](https://github.com/openkruise/agents/pull/555), [#916](https://github.com/openkruise/agents/pull/916)).
+
+### 1.3 Cost Optimization
+
+- **Sandbox recycle / return-to-pool**: released sandboxes are reused to avoid cold starts ([#548](https://github.com/openkruise/agents/pull/548), [#609](https://github.com/openkruise/agents/pull/609), [#569](https://github.com/openkruise/agents/pull/569)).
+- **Auto-pause and resume** with a probe-driven `AutoPausePolicy`, probes delivered via PodProbeMarker on real nodes and a serverless annotation on virtual nodes, and an `OnIngressTraffic` wake-on-traffic resume rule ([#612](https://github.com/openkruise/agents/pull/612), [#899](https://github.com/openkruise/agents/pull/899), [#1010](https://github.com/openkruise/agents/pull/1010), [#900](https://github.com/openkruise/agents/pull/900), [#586](https://github.com/openkruise/agents/pull/586)).
+- **PoolAutoscaler** for capacity-based and cron-driven pool autoscaling with coordinated scale-up execution ([#625](https://github.com/openkruise/agents/pull/625), [#895](https://github.com/openkruise/agents/pull/895), [#917](https://github.com/openkruise/agents/pull/917)).
+- Refined paused-sandbox retention and reduced the default failed-sandbox reserve TTL to 30 minutes ([#566](https://github.com/openkruise/agents/pull/566), [#457](https://github.com/openkruise/agents/pull/457)).
+
+---
+
+## 2. Bug Fixes
+
+**Core Lifecycle & Reconciliation**
+- Fixed `ClaimSandbox` returning `(nil, nil)` on cancellation, informer cache corruption from disabled deep copies, a TTL leak by letting Checkpoint own `SandboxTemplate`, invalid `SandboxClaim` retry loops, and sandbox cleanup on network-policy failures ([#399](https://github.com/openkruise/agents/pull/399), [#387](https://github.com/openkruise/agents/pull/387), [#419](https://github.com/openkruise/agents/pull/419), [#840](https://github.com/openkruise/agents/pull/840), [#707](https://github.com/openkruise/agents/pull/707)).
+- Corrected pause/resume semantics: resume during pausing returns 400, pausing sandboxes may pause again, resume decouples phase transition from pod readiness, and pause conditions are fixed for checkpoint-disabled and pod-deleted paths ([#404](https://github.com/openkruise/agents/pull/404), [#422](https://github.com/openkruise/agents/pull/422), [#529](https://github.com/openkruise/agents/pull/529), [#524](https://github.com/openkruise/agents/pull/524)).
+- Fixed status and clone edge cases: pod status synced before upgrade initialization, security token refresh treating absent `RuntimeInitialized` as serving, clone honoring the requested CSI mount config, checkpoint-delete expectations settling when the checkpoint is already gone, and a checkpoint leak when clone creation fails ([#912](https://github.com/openkruise/agents/pull/912), [#675](https://github.com/openkruise/agents/pull/675), [#641](https://github.com/openkruise/agents/pull/641), [#812](https://github.com/openkruise/agents/pull/812), [#1008](https://github.com/openkruise/agents/pull/1008)).
+- Fixed false-positive resource change detection in in-place updates ([#420](https://github.com/openkruise/agents/pull/420), [#557](https://github.com/openkruise/agents/pull/557)).
+
+**E2B Compatibility**
+- Dead sandboxes now return 404 from `DescribeSandbox`, `is_running` is polled after kill to avoid async-deletion races, pagination is stable for duplicate timestamps, reserved failed-sandbox cleanup works, and E2B traffic-policy precedence is correct ([#636](https://github.com/openkruise/agents/pull/636), [#692](https://github.com/openkruise/agents/pull/692), [#645](https://github.com/openkruise/agents/pull/645), [#563](https://github.com/openkruise/agents/pull/563), [#589](https://github.com/openkruise/agents/pull/589), [#740](https://github.com/openkruise/agents/pull/740)).
+- Generalized claimed-sandbox lookup so dead-but-claimed sandboxes report their real state through Describe/Delete/Connect and resume rejects them; the E2B Volume management endpoints were temporarily disabled ([#544](https://github.com/openkruise/agents/pull/544), [#744](https://github.com/openkruise/agents/pull/744)).
+- Hardened resource ownership, key storage validation, admin-key persistence, and unreadable Secret entry handling ([#835](https://github.com/openkruise/agents/pull/835), [#854](https://github.com/openkruise/agents/pull/854)).
+
+**API Keys & Quota**
+- Invalid API key creation returns 400, registry secret lookup errors propagate, and API key persistence and owner labels are hardened ([#449](https://github.com/openkruise/agents/pull/449), [#584](https://github.com/openkruise/agents/pull/584), [#677](https://github.com/openkruise/agents/pull/677)).
+
+**Controller / Webhook / CRD**
+- Fixed webhook queue bootstrap and CertDir alignment, `SandboxTemplate` webhook registration, ops-template patch sanitization, `SandboxSet` reconcile during deletion, desktop SandboxSet template mismatch, and internal labels leaking into sandbox pod templates ([#654](https://github.com/openkruise/agents/pull/654), [#820](https://github.com/openkruise/agents/pull/820), [#793](https://github.com/openkruise/agents/pull/793), [#856](https://github.com/openkruise/agents/pull/856), [#558](https://github.com/openkruise/agents/pull/558), [#911](https://github.com/openkruise/agents/pull/911)).
+
+**Gateway & Transport**
+- Traffic tokens are issued for cloned sandboxes, invalid gateway server ports normalize to the default, the UUID baseline is preserved when JWT auth is enabled, and TrafficPolicy pod selection uses the sandbox UID with a name fallback ([#728](https://github.com/openkruise/agents/pull/728), [#613](https://github.com/openkruise/agents/pull/613), [#885](https://github.com/openkruise/agents/pull/885), [#982](https://github.com/openkruise/agents/pull/982)).
+
+**Storage & Resource Leaks**
+- Stale CSI volumes are unmounted before sandbox reuse, and an unclosed `http.Response` body in the BrowserUse endpoint that caused a socket leak is fixed ([#573](https://github.com/openkruise/agents/pull/573), [#708](https://github.com/openkruise/agents/pull/708)).
+
+**Tests / CI Fixes**
+- Stabilized flaky tests and CI: sandbox connection method in resume, checkpoint conditions, the quota anti-drift primary-loss test under `-race`, quota fail-open and resume timeout checks, envoy ext_proc timeouts with tolerated transient 504s, Redis/CR state dumps on quota-rebuild E2E failure, E2B Build Image retries, free-disk-space in the e2e-e2b-mysql-latest workflow, the background-command kill test, and the access-token masking test ([#476](https://github.com/openkruise/agents/pull/476), [#592](https://github.com/openkruise/agents/pull/592), [#617](https://github.com/openkruise/agents/pull/617), [#884](https://github.com/openkruise/agents/pull/884), [#906](https://github.com/openkruise/agents/pull/906), [#816](https://github.com/openkruise/agents/pull/816), [#647](https://github.com/openkruise/agents/pull/647), [#643](https://github.com/openkruise/agents/pull/643), [#651](https://github.com/openkruise/agents/pull/651), [#634](https://github.com/openkruise/agents/pull/634)).
+
+---
+
+## 3. Chores
+
+**Dependabot Bumps**
+- `aquasecurity/trivy-action` 0.35.0 → 0.36.0 ([#294](https://github.com/openkruise/agents/pull/294)); `github/codeql-action` 4.35.4 → 4.38.0 ([#429](https://github.com/openkruise/agents/pull/429), [#466](https://github.com/openkruise/agents/pull/466), [#499](https://github.com/openkruise/agents/pull/499), [#527](https://github.com/openkruise/agents/pull/527), [#605](https://github.com/openkruise/agents/pull/605), [#618](https://github.com/openkruise/agents/pull/618), [#620](https://github.com/openkruise/agents/pull/620), [#621](https://github.com/openkruise/agents/pull/621), [#623](https://github.com/openkruise/agents/pull/623), [#680](https://github.com/openkruise/agents/pull/680), [#878](https://github.com/openkruise/agents/pull/878), [#1003](https://github.com/openkruise/agents/pull/1003)); `ruby/setup-ruby` 1.307.0 → 1.323.0 ([#430](https://github.com/openkruise/agents/pull/430), [#599](https://github.com/openkruise/agents/pull/599), [#619](https://github.com/openkruise/agents/pull/619), [#652](https://github.com/openkruise/agents/pull/652), [#681](https://github.com/openkruise/agents/pull/681), [#1020](https://github.com/openkruise/agents/pull/1020)); `crate-ci/typos` 1.46.1 → 1.50.2 ([#431](https://github.com/openkruise/agents/pull/431), [#464](https://github.com/openkruise/agents/pull/464), [#498](https://github.com/openkruise/agents/pull/498), [#602](https://github.com/openkruise/agents/pull/602), [#1022](https://github.com/openkruise/agents/pull/1022)); `codecov/codecov-action` 6.0.0 → 7.1.1 ([#432](https://github.com/openkruise/agents/pull/432), [#526](https://github.com/openkruise/agents/pull/526), [#1019](https://github.com/openkruise/agents/pull/1019)); `golangci/golangci-lint-action` 9.2.0 → 9.3.0 ([#465](https://github.com/openkruise/agents/pull/465), [#601](https://github.com/openkruise/agents/pull/601)); `actions/checkout` 6.0.1 → 7.0.1 ([#500](https://github.com/openkruise/agents/pull/500), [#578](https://github.com/openkruise/agents/pull/578), [#624](https://github.com/openkruise/agents/pull/624), [#683](https://github.com/openkruise/agents/pull/683)); `actions/cache` 5.0.5 → 6.1.0 ([#575](https://github.com/openkruise/agents/pull/575), [#600](https://github.com/openkruise/agents/pull/600)); `docker/setup-qemu-action` 3 → 4 ([#622](https://github.com/openkruise/agents/pull/622)); `docker/setup-buildx-action` 4.3.0 → 4.4.1 ([#1021](https://github.com/openkruise/agents/pull/1021)); `helm/kind-action` 1.14.0 → 1.15.0 ([#977](https://github.com/openkruise/agents/pull/977)); `zizmorcore/zizmor-action` 0.6.1 → 0.6.4 ([#877](https://github.com/openkruise/agents/pull/877), [#1006](https://github.com/openkruise/agents/pull/1006)); `spf13/cobra` 1.10.0 → 1.10.2 ([#873](https://github.com/openkruise/agents/pull/873)); `container-storage-interface/spec` 1.9.0 → 1.13.0 ([#876](https://github.com/openkruise/agents/pull/876)); `google.golang.org/protobuf` 1.36.11 → 1.36.12 ([#869](https://github.com/openkruise/agents/pull/869)); `golang-x` group ([#868](https://github.com/openkruise/agents/pull/868)); `otel` group ([#867](https://github.com/openkruise/agents/pull/867)).
+
+**Documentation & Proposals**
+- Added design proposals for pause/resume checkpoints, sandbox reuse, CSI mounts, short and stable sandbox IDs, OpenTelemetry distributed tracing, and agent identity for sandbox ingress authn and outbound access; refined agent guidance; published the v0.3.0 changelog ([#467](https://github.com/openkruise/agents/pull/467), [#547](https://github.com/openkruise/agents/pull/547), [#536](https://github.com/openkruise/agents/pull/536), [#635](https://github.com/openkruise/agents/pull/635), [#604](https://github.com/openkruise/agents/pull/604), [#697](https://github.com/openkruise/agents/pull/697), [#655](https://github.com/openkruise/agents/pull/655), [#438](https://github.com/openkruise/agents/pull/438), [#383](https://github.com/openkruise/agents/pull/383), [#673](https://github.com/openkruise/agents/pull/673)).
+
+**CI / Test Infrastructure**
+- Expanded E2E coverage for E2B 2.24.0, sandbox-manager, create-with-labels, and command execution; rewrote the pytest plugin architecture; updated the Envoy base image to v1.37.3 ([#471](https://github.com/openkruise/agents/pull/471), [#518](https://github.com/openkruise/agents/pull/518), [#582](https://github.com/openkruise/agents/pull/582), [#594](https://github.com/openkruise/agents/pull/594), [#509](https://github.com/openkruise/agents/pull/509)).
+- Added test coverage for open-source storage components (AgenticBucket, BucketSpace, OSS volume KMS BYOK), the access-token opt-in predicate, and time-related error paths; repaired the sandboxcr test build and made the sandbox-manager claim test repeatable ([#817](https://github.com/openkruise/agents/pull/817), [#676](https://github.com/openkruise/agents/pull/676), [#790](https://github.com/openkruise/agents/pull/790), [#532](https://github.com/openkruise/agents/pull/532), [#798](https://github.com/openkruise/agents/pull/798), [#1016](https://github.com/openkruise/agents/pull/1016)).
+
+**Refactors**
+- Cleaned up dependency layering and circular references, tidied injection code, simplified the sidecar-injection signature, extracted status-sync as a struct field, and switched E2B request context values to an unexported key type ([#474](https://github.com/openkruise/agents/pull/474), [#454](https://github.com/openkruise/agents/pull/454), [#480](https://github.com/openkruise/agents/pull/480), [#672](https://github.com/openkruise/agents/pull/672), [#902](https://github.com/openkruise/agents/pull/902)).
+
+**Scripts & Runtime Utilities**
+- Updated runtime scripts and hardened runtime command timeouts and permissions ([#516](https://github.com/openkruise/agents/pull/516), [#541](https://github.com/openkruise/agents/pull/541), [#486](https://github.com/openkruise/agents/pull/486), [#503](https://github.com/openkruise/agents/pull/503)).
+
+**Supply-Chain Security**
+- CI now runs govulncheck, zizmor, and OpenSSF Scorecard with gosec enabled; GitHub Actions were hardened, code-scanning and gosec findings were fixed, and a SECURITY.md policy was added ([#836](https://github.com/openkruise/agents/pull/836), [#921](https://github.com/openkruise/agents/pull/921), [#918](https://github.com/openkruise/agents/pull/918), [#587](https://github.com/openkruise/agents/pull/587), [#606](https://github.com/openkruise/agents/pull/606)).
+
+**Generated Code & Release Management**
+- Regenerated clients after API changes, relocated security-related files, and synced master into the release-v0.6 branch for the alpha releases ([#417](https://github.com/openkruise/agents/pull/417), [#456](https://github.com/openkruise/agents/pull/456), [#957](https://github.com/openkruise/agents/pull/957), [#999](https://github.com/openkruise/agents/pull/999)).
+
+**Development Tooling**
+- Added an E2B code-path analysis skill and extended the code-reviewer skill with a change-summary section ([#477](https://github.com/openkruise/agents/pull/477), [#583](https://github.com/openkruise/agents/pull/583)).
+
+---
+
+## New Contributors
+
+* @Kuromesi made their first contribution in https://github.com/openkruise/agents/pull/397
+* @oindrilakha12-ui made their first contribution in https://github.com/openkruise/agents/pull/387
+* @l1b0k made their first contribution in https://github.com/openkruise/agents/pull/433
+* @rakshaak29 made their first contribution in https://github.com/openkruise/agents/pull/442
+* @delavet made their first contribution in https://github.com/openkruise/agents/pull/483
+* @zyl1121 made their first contribution in https://github.com/openkruise/agents/pull/447
+* @Jayant-kernel made their first contribution in https://github.com/openkruise/agents/pull/558
+* @denverdino made their first contribution in https://github.com/openkruise/agents/pull/587
+* @chacha923 made their first contribution in https://github.com/openkruise/agents/pull/563
+* @yanghanlin made their first contribution in https://github.com/openkruise/agents/pull/594
+* @Liquorice-Ma made their first contribution in https://github.com/openkruise/agents/pull/497
+* @googs1025 made their first contribution in https://github.com/openkruise/agents/pull/545
+* @singhsrijan46 made their first contribution in https://github.com/openkruise/agents/pull/613
+* @ashnaaseth2325-oss made their first contribution in https://github.com/openkruise/agents/pull/584
+* @ZeroCoder-dot made their first contribution in https://github.com/openkruise/agents/pull/673
+* @AlbeeSo made their first contribution in https://github.com/openkruise/agents/pull/676
+* @vishalmore90 made their first contribution in https://github.com/openkruise/agents/pull/708
+* @silver-chard made their first contribution in https://github.com/openkruise/agents/pull/537
+* @nishantbkl3345-ship-it made their first contribution in https://github.com/openkruise/agents/pull/798
+* @HARSHRAJ2789 made their first contribution in https://github.com/openkruise/agents/pull/790
+* @DahuK made their first contribution in https://github.com/openkruise/agents/pull/836
+* @chrisliu1995 made their first contribution in https://github.com/openkruise/agents/pull/625
+* @omlahore made their first contribution in https://github.com/openkruise/agents/pull/902
+* @RedZapdos123 made their first contribution in https://github.com/openkruise/agents/pull/886
+* @ywExcellent made their first contribution in https://github.com/openkruise/agents/pull/895
+* @u7k4rs6 made their first contribution in https://github.com/openkruise/agents/pull/1016
+
+**Full Changelog**: https://github.com/openkruise/agents/compare/v0.3.0...v0.6.0-alpha4
+
 ## v0.6.0-alpha1
 > Change log since v0.3.0
 
