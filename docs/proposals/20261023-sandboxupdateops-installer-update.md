@@ -3,7 +3,7 @@ title: SandboxUpdateOps InstallerUpdate Strategy
 authors:
   - "@TBD"
 creation-date: 2026-10-23
-last-updated: 2026-10-28
+last-updated: 2026-10-29
 status: provisional
 see-also:
   - "/docs/proposals/20251218-sandbox-inplace-update.md"
@@ -865,6 +865,45 @@ The installer command is expected to:
    condition message, following the existing hook behaviour
    (`pkg/controller/sandbox/core/upgrade_control.go:516`).
 
+#### PID 1 in the target container
+
+The contract is anchored on `/proc/1/root`, which is the root filesystem of **PID 1
+of the target container's PID namespace**. Two constraints follow from that, and
+they pull in opposite directions.
+
+**The sandbox entrypoint must not be PID 1.** Vendor updaters stop the service they
+are updating. `hermes update` stops every gateway belonging to its install
+immediately before it first changes the checkout, unless `--no-gateway-restart` is
+passed; `openclaw update` restarts the gateway unless `--no-restart` is passed. If
+the harness *is* PID 1, stopping it terminates the container, and the kubelet
+creates a new container instance with a **fresh writable layer** — the install is
+destroyed moments after it succeeded, and the batch still reports success, because
+the installer exited 0 before the stop happened. The same applies to a plain
+`kill(1)` from any tooling the updater invokes.
+
+So the sandbox must be authored with an init or supervisor as PID 1 and the harness
+as its child. This is already the convention in this repository: the OpenClaw
+example injects `tini` and runs `command: ["/mnt/tini/tini", "--"]`
+(`examples/openclaw/README.md:106`), so the gateway is a child of `tini` and
+stopping it does not end the container. A supervisor is also what reaps the
+processes an injected ephemeral container leaves behind in the shared PID
+namespace, since PID 1 owns orphan reaping.
+
+Where an image cannot be re-authored, the updater must be told not to stop the
+service. The contract's position is that stopping and restarting the workload is
+`postUpgrade`'s job rather than the installer's, because `postUpgrade` runs after
+the installer has exited and after the controller has observed its exit code — a
+restart there is visible and can fail the batch.
+
+**The target container must own its PID namespace.** If the resolved Pod spec sets
+`shareProcessNamespace: true` or `hostPID: true`, PID 1 is the `pause` container or
+the node's init rather than the target's entrypoint, so `/proc/1/root` names the
+wrong rootfs. The step-1 `-ef` guard does **not** catch this: `pause`'s root is not
+the installer's root either, so the check passes and the installer writes the
+payload into `pause` and exits 0. Nothing in the repository validates either field
+today, so the controller must check them itself before injecting — see
+[Sandbox Controller Changes](#sandbox-controller-changes).
+
 #### Run your own tooling, never the target's
 
 `targetContainerName` joins the target's **PID and IPC** namespaces only. The mount
@@ -1057,7 +1096,7 @@ transition directly to `PreUpgrade`; the abandonment check keys off
 `PatchVersion != CompletedPatchVersion` instead of `UpdateRevision`.
 
 **New `Installing` step.** A `performInstallerUpgrade` function replaces
-`Checkpointing` + `UpgradePod` and does six things:
+`Checkpointing` + `UpgradePod` and does seven things:
 
 1. **Resolve the target container.** `installer.targetContainerName`, or
    `spec.template.spec.containers[0].name` when empty — the same convention
@@ -1066,21 +1105,28 @@ transition directly to `PreUpgrade`; the abandonment check keys off
    from the resolved Pod spec, set `InstallingFailed` with an explanatory message;
    this cannot be caught at admission because the selector may match sandboxes
    that do not exist yet.
-2. **Require a live target.** The Pod must be `Running` and the target's
+2. **Guard PID namespace ownership.** If the resolved Pod spec sets
+   `shareProcessNamespace` or `hostPID`, set `InstallingFailed` with an explanatory
+   message. PID 1 would then be `pause` or the node's init, so `/proc/1/root` names
+   the wrong rootfs and the installer's own `-ef` guard cannot detect it — see
+   [PID 1 in the target container](#pid-1-in-the-target-container). Like the target
+   name resolution in step 1, this is a controller-side check rather than an
+   admission check, because the selector may match sandboxes that do not exist yet.
+3. **Require a live target.** The Pod must be `Running` and the target's
    `ContainerStatus.State.Running` must be non-nil. Otherwise wait — do not fail,
    since a transient restart should not abort the batch.
-3. **Count prior attempts** by scanning `pod.Spec.EphemeralContainers` for names
+4. **Count prior attempts** by scanning `pod.Spec.EphemeralContainers` for names
    prefixed `installer-<hash8(patchVersion)>`. Attempt numbering and the retry cap
    are derived from this list, so no extra status field is needed. Exceeding the
    cap (`--installer-max-attempts`, default 3) sets `InstallingFailed`.
-4. **Inject.** Append one `EphemeralContainer` named
+5. **Inject.** Append one `EphemeralContainer` named
    `installer-<hash8>-<attempt>`, carrying the resolved image, command, env,
    security context and image pull policy, with `TargetContainerName` set. Write it
    through the `ephemeralcontainers` subresource — the same pattern already used
    for `pods/resize` at `pkg/utils/inplaceupdate/inplace_update.go:524`. A
    `Conflict` means the Pod changed underneath us: requeue and retry the whole
    step, recomputing from the fresh Pod rather than injecting twice.
-5. **Wait and evaluate** `pod.Status.EphemeralContainerStatuses` for the injected
+6. **Wait and evaluate** `pod.Status.EphemeralContainerStatuses` for the injected
    name:
    - `State.Waiting.Reason == "ImagePullBackOff" | "ErrImagePull"` → retryable;
      re-inject on the next attempt (the failed entry stays, since ephemeral
@@ -1102,7 +1148,7 @@ transition directly to `PreUpgrade`; the abandonment check keys off
    - `State.Running` past `installer.timeoutSeconds` (measured from
      `State.Running.StartedAt`) → `InstallingFailed`, message noting the container
      cannot be terminated.
-6. **Record completion.** Copy `spec.upgradePolicy.patchVersion` into
+7. **Record completion.** Copy `spec.upgradePolicy.patchVersion` into
    `status.completedPatchVersion`, then fall through to `PostUpgrade`.
 
 On success the existing tail of `EnsureSandboxUpgraded` (lines 291-305) already
@@ -1138,9 +1184,21 @@ In `pkg/webhook/sandboxupdateops/validating/sandboxupdateops_validate.go`:
   writable layer, and under `InstallerUpdate` an image change would additionally
   restart the target container and destroy the layer the install just wrote.
 - **`installer.env`.** Reject names with the reserved `SANDBOX_INSTALLER_` prefix.
-- **`installer.securityContext`.** Reject `privileged: true` and `hostPID`-equivalent
-  escalation; the installer only needs to reach one container's PID namespace,
-  which targeting already provides.
+- **`installer.securityContext`.** Reject `privileged: true`. This is a new check —
+  nothing in the repository restricts it today, and `--allow-privileged` defaults to
+  `true` (`cmd/agent-sandbox-controller/main.go:127`), so the upstream validation
+  the webhook borrows permits privileged containers.
+  **`CAP_SYS_ADMIN` is deliberately not rejected.** It is strictly worse than what
+  the design needs, and the controller never adds it by default — the only
+  capability it injects is `SYS_PTRACE`. But an explicit
+  `installer.securityContext.capabilities.add: ["SYS_ADMIN"]` is how an operator
+  opts into the `nsenter` escape hatch described in
+  [Alternatives](#alternatives), so rejecting it would close a documented path.
+- **PID namespace ownership.** `shareProcessNamespace` and `hostPID` are Pod-side
+  fields that cannot be checked here, because the selector may match sandboxes that
+  do not exist yet. They are checked by the sandbox controller at inject time — see
+  [Sandbox Controller Changes](#sandbox-controller-changes) and
+  [PID 1 in the target container](#pid-1-in-the-target-container).
 - **Immutability.** `handleUpdate` (line 152) currently permits changing
   `updateStrategy`. Narrow that for this strategy: `updateStrategy.installer` is
   immutable after creation, like `patch` and `lifecycle`, because mutating it
@@ -1157,7 +1215,7 @@ must understand its lifetime:
 | Event | Outcome |
 |---|---|
 | Sandbox keeps running | Content persists indefinitely. |
-| Target container restarts in place (crash, `restartPolicy: Always`) | **Lost.** The kubelet creates a new container instance with a fresh writable layer. |
+| Target container restarts in place (crash, `restartPolicy: Always`, or an updater stopping a harness that is PID 1) | **Lost.** The kubelet creates a new container instance with a fresh writable layer. |
 | Pod deleted / node failure / eviction | **Lost.** A new Pod is created from `spec.template`, which still names the original image. |
 | `spec.paused` with `pauseStrategy: Stop` | **Lost** — the Pod is deleted. |
 | `spec.paused` with `pauseStrategy: Hibernate` and `persistentContents: [filesystem]` | Preserved through the checkpoint/restore path. |
@@ -1274,6 +1332,21 @@ their toolchain is in and what flag it needs; and preferring a self-contained
 directory located by a `*_HOME` variable avoids absolute-path baking altogether.
 `postUpgrade` remains the backstop, since the harness will fail to start.
 
+**The install succeeds and is then wiped by a workload restart.** If the harness is
+PID 1 of the target container, an updater that stops the service ends the
+container, and the kubelet restarts it with a fresh writable layer. The installed
+content disappears *after* the batch has already reported success. See
+[PID 1 in the target container](#pid-1-in-the-target-container) and
+[Durability](#durability-of-the-result).
+*Mitigation:* documented as an authoring requirement on the sandbox image — run an
+init or supervisor as PID 1 with the harness as its child, which is what the
+OpenClaw example already does (`examples/openclaw/README.md:106`). The controller
+cannot enforce this, because whether PID 1 is the harness is a property of the
+image's entrypoint and not of the Pod spec. Two backstops: the installer shares the
+target's PID namespace, so it can read and log `/proc/1/cmdline` and an operator
+who knows their harness can assert on it; and a `postUpgrade` that asserts the new
+version *after* the restart step turns a wiped install into a fail-stopped batch.
+
 **A hung installer cannot be stopped.** Ephemeral containers have no `lifecycle`,
 cannot be removed, and are not restarted. There is no API to kill one.
 *Mitigation:* `timeoutSeconds` moves the sandbox to `InstallingFailed` so the
@@ -1296,11 +1369,17 @@ once. There is no way to hard-guarantee isolation here.
 
 **Wider attack surface from a customer-supplied image with `SYS_PTRACE`.** The
 installer runs arbitrary customer code with ptrace over the harness process.
-*Mitigation:* the blast radius is one container's PID namespace, not the node —
-targeting deliberately avoids pod-wide `shareProcessNamespace`, which the Pod
-template validator already forbids. The webhook rejects `privileged: true`. The
-operator supplies the image, so this is the same trust decision as supplying a
-sandbox image. Documented explicitly so it is a conscious choice.
+*Mitigation:* the blast radius is one container's PID namespace, not the node,
+because targeting joins exactly one target's PID and IPC namespaces rather than
+turning on pod-wide `shareProcessNamespace`. That bound holds only while the
+installer is kept off `privileged` and `CAP_SYS_ADMIN`. The controller injects
+`SYS_PTRACE` and nothing else, and the `installer.securityContext` check in
+[Validation](#validation) rejects `privileged: true` — but that check is new work,
+not a restatement of existing behaviour: `--allow-privileged` defaults to `true`
+(`cmd/agent-sandbox-controller/main.go:127`), so today nothing stops it. An
+operator who grants `SYS_ADMIN` explicitly for `nsenter` widens the radius
+knowingly. The operator supplies the image, so this is the same trust decision as
+supplying a sandbox image. Documented explicitly so it is a conscious choice.
 
 **Partial install leaves the sandbox inconsistent.** A non-zero exit mid-copy
 means some files are new and some are old.
@@ -1336,17 +1415,18 @@ on the subresource update handles concurrent Pod mutation.
 **Pod-level `shareProcessNamespace: true` plus a regular sidecar.** Rejected.
 `shareProcessNamespace` can only be set at Pod creation, so it cannot be turned on
 for a running sandbox — the Pod would have to be replaced, which is exactly what
-this proposal avoids. It is also rejected outright by this repository's Pod
-template validator (`pkg/webhook/utils/extravalidation/pods.go:54`), and it would
-expose every container's processes to every other container rather than to one
-targeted installer.
+this proposal avoids. It would also expose every container's processes to every
+other container rather than to one targeted installer, and it breaks the
+file-access contract outright: PID 1 becomes the `pause` container, so
+`/proc/1/root` no longer names the target's rootfs — see
+[PID 1 in the target container](#pid-1-in-the-target-container).
 
 **A pre-installed, always-present sidecar that waits for work.** Rejected. It
 consumes resources in every sandbox for the whole fleet lifetime to serve an
 occasional operation, it must still be present in the Pod template (so it cannot
 be retrofitted to existing sandboxes without replacement), and it would need its
 own command channel and authentication. `shareProcessNamespace` would be required
-at creation time, with the same validator problem.
+at creation time, with the same PID-1 and immutability problems as above.
 
 **`nsenter` into the target's mount namespace and run the harness's own updater.**
 Considered and rejected as the *default*. It is technically possible — an operator
@@ -1508,6 +1588,17 @@ populate `ephemeralContainerStatuses`):
 - Namespace targeting self-check: an installer that only performs the `-ef` guard
   and exits 0 proves targeting works on the CI runtime; the same image exiting 125
   proves the failure path reports distinctly.
+- **PID namespace guard:** a sandbox whose Pod sets `shareProcessNamespace: true`
+  must reach `InstallingFailed` with a message naming the field, and no ephemeral
+  container may be injected. This is the misconfiguration the installer's own `-ef`
+  guard cannot detect, because `pause`'s root differs from the installer's root too.
+- **Supervisor requirement:** the same installer and the same `postUpgrade` hook —
+  which stops and restarts the harness, as a vendor updater would — run against two
+  sandboxes. Where an init is PID 1 with the harness as its child (the OpenClaw
+  example's `tini`), the hook succeeds and the installed content survives the
+  restart. Where the harness *is* PID 1, stopping it terminates the container
+  mid-hook, so the batch must reach `PostUpgradeFailed` and the writable layer must
+  be gone. This proves the loss is detected rather than silently shipped.
 - **Prefix-redirect pattern:** an installer that runs npm with
   `NPM_CONFIG_PREFIX` set to `$SANDBOX_INSTALLER_TARGET_ROOT/usr/local`,
   installing a local tarball baked into the installer image. Assert from inside
@@ -1589,6 +1680,26 @@ individually.
       worked **Hermes Agent** installer image (Dockerfile, install script,
       matching `postUpgrade`) as the reference example. Replaced the code snippets
       in both Controller Changes sections with prose describing the change.
+- [ ] 10/29/2026: Added **PID 1 in the target container** to the Installer
+      Contract, documenting both directions of the constraint. The sandbox
+      entrypoint must not be PID 1: a vendor updater that stops the service it is
+      updating (`hermes update` without `--no-gateway-restart`, `openclaw update`
+      without `--no-restart`) would terminate the container, and the kubelet would
+      restart it with a fresh writable layer, discarding the install after the
+      batch had already reported success — so an init or supervisor must be PID 1
+      with the harness as its child, which is what the OpenClaw example already
+      does (`examples/openclaw/README.md:106`). And the target container must own
+      its PID namespace: under `shareProcessNamespace` or `hostPID`, PID 1 is
+      `pause` or the node's init, so `/proc/1/root` names the wrong rootfs and the
+      installer's own `-ef` guard cannot detect it. Added the matching controller
+      pre-flight step, a risk entry, two E2E controls and a durability-table cause.
+      Also corrected two false claims found while writing this: the repository has
+      no Pod template validator rejecting `shareProcessNamespace` (the previously
+      cited `pkg/webhook/utils/extravalidation/pods.go` does not exist), and the
+      webhook does not reject `privileged: true` — `--allow-privileged` defaults to
+      `true` (`cmd/agent-sandbox-controller/main.go:127`). Both rejections are new
+      work; explicit `CAP_SYS_ADMIN` stays permitted so the documented `nsenter`
+      opt-in remains expressible.
 - [ ] Verify the prefix-redirect pattern end-to-end against a real OpenClaw and a
       real Hermes Agent sandbox, including whether lifecycle scripts and native
       builds survive the libc-family match requirement, and whether
@@ -1626,6 +1737,7 @@ individually.
 - [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) — "The agent that grows with you"; Python, `uv`-managed environments.
 - [Hermes Agent — Installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation) — `~/.hermes`, `/opt/hermes`, `$PREFIX/lib/hermes`, and the `--dir` / `-InstallDir` / `-HermesHome` location flags.
 - [Hermes Agent — CLI commands](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) — `hermes update`, `--check`, `--backup` (`HERMES_HOME` snapshot).
+- `NousResearch/hermes-agent`, `hermes_cli/update_cmd_posix_pause.py` and `hermes_cli/update_cmd_fleet.py` — `hermes update` stops every gateway belonging to its install immediately before it first changes the checkout; `--no-gateway-restart` makes `arm_pause` return `None`, asserted by `tests/e2e/core/upgrade/git/test_hostile_pause.py::test_no_gateway_restart_stops_nothing_before_the_move`. This is the concrete case behind the PID-1 constraint.
 - [astral-sh/uv#13350: Shebang lines in scripts use absolute paths](https://github.com/astral-sh/uv/issues/13350) — the non-relocatable venv failure mode.
 - [astral-sh/uv#17770: Use relocatable virtual environments by default](https://github.com/astral-sh/uv/pull/17770) — preview-only, so `--relocatable` / `UV_VENV_RELOCATABLE` must be set explicitly.
 - [uv CLI reference](https://docs.astral.sh/uv/reference/cli/) — `uv venv --relocatable`.
