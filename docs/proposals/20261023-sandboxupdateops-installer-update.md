@@ -597,102 +597,121 @@ appended ephemeral container and its status.
 
 #### `SandboxUpdateOpsStrategyType`
 
-`api/v1alpha1/sandboxupdateops_types.go:73-91` gains a third value:
+`api/v1alpha1/sandboxupdateops_types.go:73-91` gains a third value,
+`InstallerUpdate`, alongside the existing `Recreate` and `CheckpointRestore`. It
+means sandboxes are updated by injecting an ephemeral installer container into the
+running Pod: the installer writes new content into the target container's
+filesystem through `/proc/1/root`, so the Pod is not replaced and the target
+container's writable layer is preserved. Container images must not be modified —
+see [Validation](#validation).
 
-```go
-const (
-	SandboxUpdateOpsStrategyRecreate SandboxUpdateOpsStrategyType = "Recreate"
-
-	SandboxUpdateOpsStrategyCheckpointRestore SandboxUpdateOpsStrategyType = "CheckpointRestore"
-
-	// SandboxUpdateOpsStrategyInstallerUpdate means sandboxes will be updated by
-	// injecting an ephemeral installer container into the running Pod. The installer
-	// writes new content into the target container's filesystem through
-	// /proc/1/root, so the Pod is not replaced and the target container's writable
-	// layer is preserved. Container images in spec.patch must not be modified.
-	SandboxUpdateOpsStrategyInstallerUpdate SandboxUpdateOpsStrategyType = "InstallerUpdate"
-)
-```
-
-The `+kubebuilder:validation:Enum` marker on
-`SandboxUpdateOpsStrategy.Type` becomes `Enum=Recreate;CheckpointRestore;InstallerUpdate`.
+The `+kubebuilder:validation:Enum` marker on `SandboxUpdateOpsStrategy.Type`
+becomes `Enum=Recreate;CheckpointRestore;InstallerUpdate`.
 
 #### `SandboxUpdateOpsStrategy.Installer`
 
-```go
-type SandboxUpdateOpsStrategy struct {
-	// Type specifies the update strategy type.
-	// When empty, defaults to Recreate.
-	// Supported values: Recreate, CheckpointRestore, InstallerUpdate.
-	// +kubebuilder:validation:Enum=Recreate;CheckpointRestore;InstallerUpdate
-	// +optional
-	Type SandboxUpdateOpsStrategyType `json:"type,omitempty"`
+`SandboxUpdateOpsStrategy` gains one field, `installer`, which configures the
+ephemeral container injected into each selected sandbox. It is required when
+`type: InstallerUpdate` and forbidden otherwise. A complete object:
 
-	// MaxUnavailable is the maximum number of sandboxes that can be upgrading at the same time.
-	// +optional
-	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+```yaml
+apiVersion: agents.kruise.io/v1alpha1
+kind: SandboxUpdateOps
+metadata:
+  name: harness-1.4.0
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: openclaw
 
-	// Installer configures the ephemeral container injected into each selected
-	// sandbox. Required when Type is InstallerUpdate, forbidden otherwise.
-	// +optional
-	Installer *InstallerSpec `json:"installer,omitempty"`
-}
+  updateStrategy:
+    type: InstallerUpdate
+    maxUnavailable: 1
+    installer:
+      # Required. Carrier of the update payload and of whatever tooling the
+      # command needs. The image tag is the record of what was installed.
+      image: registry.example.com/harness-installer:1.4.0
 
-// InstallerSpec describes the ephemeral container that carries and applies the update.
-type InstallerSpec struct {
-	// Image is the installer image. It is the carrier of the update payload and of
-	// whatever tooling the Command needs.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Image string `json:"image"`
+      # Optional. argv-style entrypoint; when omitted the image's ENTRYPOINT and
+      # CMD are used. Must be idempotent — it may be re-executed on a new attempt
+      # after an infrastructure failure such as an image pull error.
+      command:
+        - /install.sh
 
-	// Command is the installer entrypoint, argv-style. When empty the image's
-	// ENTRYPOINT and CMD are used. The command must be idempotent: it may be
-	// re-executed on a new attempt after an infrastructure failure.
-	// +optional
-	// +listType=atomic
-	Command []string `json:"command,omitempty"`
+      # Optional. The sandbox container whose filesystem is updated. Defaults to
+      # the first container of the sandbox Pod template.
+      targetContainerName: gateway
 
-	// TargetContainerName is the sandbox container whose filesystem is updated.
-	// When empty it defaults to the first container of the sandbox Pod template.
-	// +optional
-	TargetContainerName string `json:"targetContainerName,omitempty"`
+      # Optional. Appended to the environment variables the controller injects;
+      # see the Installer Contract for the reserved SANDBOX_INSTALLER_* names.
+      env:
+        - name: HARNESS_CHANNEL
+          value: stable
 
-	// Env is appended to the environment variables the controller injects. See the
-	// Installer Contract for the reserved SANDBOX_INSTALLER_* names.
-	// +optional
-	// +listType=map
-	// +listMapKey=name
-	Env []v1.EnvVar `json:"env,omitempty"`
+      # Optional, and a full override rather than a merge: when it is unset the
+      # controller defaults capabilities.add to ["SYS_PTRACE"] and inherits the
+      # target container's runAsUser when it is set, so an explicit value must
+      # repeat the capability or the installer cannot read /proc/1/root.
+      securityContext:
+        capabilities:
+          add: ["SYS_PTRACE"]
+        runAsUser: 1000
 
-	// SecurityContext overrides the security context of the installer container.
-	// The controller defaults capabilities.add to ["SYS_PTRACE"] and inherits the
-	// target container's runAsUser when it is set.
-	// +optional
-	SecurityContext *v1.SecurityContext `json:"securityContext,omitempty"`
+      # Optional. Defaults to IfNotPresent.
+      imagePullPolicy: IfNotPresent
 
-	// ImagePullPolicy for the installer image. Defaults to IfNotPresent.
-	// +optional
-	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
-	ImagePullPolicy v1.PullPolicy `json:"imagePullPolicy,omitempty"`
+      # Optional. Bounds a single install attempt. When the installer container
+      # has been running longer than this the sandbox is marked InstallingFailed;
+      # the container itself cannot be stopped — see Risks and Mitigations.
+      # Defaults to 600.
+      timeoutSeconds: 900
 
-	// TimeoutSeconds bounds a single install attempt. When the installer container
-	// has been running longer than this, the sandbox is marked InstallingFailed.
-	// The container itself cannot be stopped; see Risks and Mitigations.
-	// Defaults to 600.
-	// +optional
-	// +kubebuilder:default=600
-	// +kubebuilder:validation:Minimum=1
-	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
-}
+  # patch is deliberately omitted. Under InstallerUpdate the payload comes from
+  # the installer image rather than from a new sandbox image, and omitting it is
+  # what keeps classification on the intended path: isSandboxTemplateMatchPatch
+  # short-circuits only when the raw patch is empty
+  # (pkg/controller/sandboxupdateops/patch.go:77), so `patch: {}` is not
+  # equivalent to leaving the field out.
+
+  lifecycle:
+    postUpgrade:
+      exec:
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -eu
+            harness --version | grep -F 1.4.0
+      timeoutSeconds: 120
+
+  stateFilter:
+    states: [Running]
 ```
 
-`InstallerSpec` is declared in `api/v1alpha1/sandbox_types.go` rather than in
-`sandboxupdateops_types.go`, because it is referenced from both
-`SandboxUpdateOpsStrategy.Installer` and `SandboxUpgradePolicy.Installer`. That
-file already imports `v1 "k8s.io/api/core/v1"` and already carries a
-`+kubebuilder:default` on a timeout field (`UpgradeAction.TimeoutSeconds`), so the
-markers above follow existing convention in the same file.
+What the manifest cannot express, field by field:
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `updateStrategy.type` | no | `Recreate` | Enum widened to `Recreate;CheckpointRestore;InstallerUpdate`. |
+| `updateStrategy.installer` | with `type: InstallerUpdate` | — | Rejected under any other strategy. |
+| `installer.image` | **yes** | — | `MinLength=1`. |
+| `installer.command` | no | image `ENTRYPOINT`/`CMD` | `+listType=atomic`, so a strategic merge patch replaces the whole list instead of appending. |
+| `installer.targetContainerName` | no | `containers[0].name` | Resolved at install time rather than at admission, because the selector may match sandboxes that do not exist yet. |
+| `installer.env` | no | — | `+listType=map` keyed on `name`. Names with the reserved `SANDBOX_INSTALLER_` prefix are rejected. |
+| `installer.securityContext` | no | `capabilities.add: ["SYS_PTRACE"]`, `runAsUser` inherited from the target when set | `privileged: true` is rejected. A supplied value overrides the defaults wholesale. |
+| `installer.imagePullPolicy` | no | `IfNotPresent` | Enum `Always;IfNotPresent;Never`. |
+| `installer.timeoutSeconds` | no | `600` | `Minimum=1`. Bounds one attempt, not the whole retry sequence. |
+
+The Go declaration itself is unchanged in shape from the existing
+`SandboxUpdateOpsStrategy`: one optional pointer field, `Installer
+*InstallerSpec` with `json:"installer,omitempty"`. `InstallerSpec` is declared in
+`api/v1alpha1/sandbox_types.go` rather than in `sandboxupdateops_types.go`,
+because it is referenced from both `SandboxUpdateOpsStrategy.Installer` and
+`SandboxUpgradePolicy.Installer`. That file already imports
+`v1 "k8s.io/api/core/v1"` and already carries a `+kubebuilder:default` on a
+timeout field (`UpgradeAction.TimeoutSeconds`), so the markers follow existing
+convention in the same file.
 
 #### `SandboxUpgradePolicyType`, `SandboxUpgradePolicy`, `SandboxStatus`
 
@@ -1700,6 +1719,18 @@ individually.
       `true` (`cmd/agent-sandbox-controller/main.go:127`). Both rejections are new
       work; explicit `CAP_SYS_ADMIN` stays permitted so the documented `nsenter`
       opt-in remains expressible.
+- [ ] 10/29/2026: Replaced the Go declarations of `SandboxUpdateOpsStrategyType`
+      and `SandboxUpdateOpsStrategy.Installer` with a complete `SandboxUpdateOps`
+      YAML example carrying every `installer` field with its semantics as inline
+      comments, plus a field table for what YAML cannot express (required/optional,
+      defaults, `+listType` merge behaviour, enum ranges). Two consequences worth
+      noting surfaced while writing the example: `installer.securityContext` is a
+      full override rather than a merge, so an operator who sets it must repeat
+      `capabilities.add: ["SYS_PTRACE"]`; and `patch: {}` is *not* equivalent to
+      omitting `spec.patch`, because `isSandboxTemplateMatchPatch` short-circuits
+      only on an empty raw patch (`pkg/controller/sandboxupdateops/patch.go:77`),
+      so the example omits it. The `SandboxUpgradePolicy` and `SandboxStatus`
+      declarations remain in Go.
 - [ ] Verify the prefix-redirect pattern end-to-end against a real OpenClaw and a
       real Hermes Agent sandbox, including whether lifecycle scripts and native
       builds survive the libc-family match requirement, and whether
