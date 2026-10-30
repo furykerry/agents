@@ -6,6 +6,7 @@ creation-date: 2026-10-23
 last-updated: 2026-10-29
 status: provisional
 see-also:
+  - "/docs/proposals/20261029-agent-harness-upgrade-survey.md"
   - "/docs/proposals/20251218-sandbox-inplace-update.md"
   - "/docs/proposals/20260616-create-suo-command.md"
   - "/docs/proposals/20260915-checkpoint-api-extension.md"
@@ -25,7 +26,6 @@ see-also:
   - [How agent harnesses upgrade themselves](#how-agent-harnesses-upgrade-themselves)
   - [Install-location overrides](#install-location-overrides)
   - [Air-gapped and mirrored environments](#air-gapped-and-mirrored-environments)
-  - [Example installer image: Hermes Agent](#example-installer-image-hermes-agent)
 - [Proposal](#proposal)
   - [Overview](#overview)
   - [API Changes](#api-changes)
@@ -112,7 +112,7 @@ operation.
 
 `Sandbox.spec.lifecycle.preUpgrade` / `postUpgrade` already execute a command
 inside the sandbox container via envd
-(`pkg/controller/sandbox/core/lifecycle_handler.go:44`). That is sufficient for
+(`pkg/controller/sandbox/core/lifecycle_handler.go:106`). That is sufficient for
 step 4 but not for step 3, for three reasons:
 
 - **No payload carrier.** An exec hook can only use files already present in the
@@ -183,14 +183,28 @@ prefix-aware installer — into an image.
   SandboxSet-controlled sandboxes; that exclusion is unchanged.
 - **Running an installer with no version change at all.** `spec.patch` may still
   carry non-image changes, but the installer is always the unit of work.
+- **Making the sandbox entrypoint not PID 1.** This proposal states the constraint
+  — see [PID 1 in the target container](#pid-1-in-the-target-container) — but does
+  not change how a sandbox's container command is constructed. Rewriting the main
+  container's command is owned by the dynamic environment variable injection
+  proposal
+  ([openkruise/agents#1130](https://github.com/openkruise/agents/pull/1130)), which
+  already replaces `containers[0]`'s command with a `run_with_envs.sh` wrapper and
+  is therefore the place to keep the harness as a supervised child rather than PID
+  1. As drafted that wrapper ends in `exec "${USER_CMD[@]}"`, so the harness still
+  becomes PID 1; turning the wrapper into a supervisor is tracked there, not here.
 
 ## Background
 
+The design rests on a survey of how five mainstream harnesses — OpenClaw, Claude
+Code, Codex CLI, Gemini CLI and Hermes Agent — upgrade themselves. Only the
+conclusions the design depends on are reproduced here. The per-harness tables, the
+empirical verification transcripts and a complete worked installer image for
+Hermes Agent are in [Agent Harness Upgrade Survey](./20261029-agent-harness-upgrade-survey.md).
+
 ### How agent harnesses upgrade themselves
 
-Five mainstream harnesses were surveyed — OpenClaw, Claude Code, Codex CLI, Gemini
-CLI and Hermes Agent. Three conclusions shape this proposal; the evidence for each
-is in the section named after it.
+Three conclusions shape this proposal; the evidence for each is in the survey.
 
 1. **Upgrading is a filesystem mutation, not an image rebuild.** Every harness
    replaces files under an install prefix — `/usr/local/lib/node_modules`,
@@ -231,32 +245,19 @@ entry points and the package managers underneath can. See
 
 ### Install-location overrides
 
-The detail behind conclusion 2 above. Where a harness accepts an explicit install
-prefix, the installer container can run **its own** tooling with its output
-redirected into the target's filesystem — reusing the vendor's install logic instead
-of reimplementing it as a `cp -a`.
+Where a harness accepts an explicit install prefix, the installer container can run
+**its own** tooling with its output redirected into the target's filesystem —
+reusing the vendor's install logic instead of reimplementing it as a `cp -a`.
 
-| Harness | Install-location override | Notes |
-|---|---|---|
-| **OpenClaw** | **First-class.** `install-cli.sh --prefix <path>` (default `~/.openclaw`); env `OPENCLAW_PREFIX`, `OPENCLAW_HOME`. `openclaw update` honours `NPM_CONFIG_PREFIX`, documented as `NPM_CONFIG_PREFIX="$(npm prefix -g)" openclaw update`. | The local-prefix installer is a *fresh install* path, so it sidesteps the `update` owner check that skips container-managed installs. Non-interactive: `--no-prompt`, `--no-onboard`, `--json`, `OPENCLAW_NO_PROMPT=1`. |
-| **Hermes Agent** | **First-class, and the cleanest case.** Install-location flags `--dir`, `-InstallDir`, `-HermesHome`; env `HERMES_HOME`. Defaults: `~/.hermes` (Linux/macOS), `%LOCALAPPDATA%\hermes` (Windows), `/opt/hermes` (container), `$PREFIX/lib/hermes` (Termux). | Distributed by installer script, git, or APT — **not** npm or pip. The Python environment is managed by `uv`, which changes the relocatability analysis; see below. The whole install is a **self-contained directory**, so redirecting it does not interleave with the target's shared `/usr/local` the way an npm global prefix does. |
-| **Claude Code** | **Partial.** `claude install [version]` — the argument is a *version*, not a path; the native installer targets `~/.local/bin` with no location override. The npm path honours `NPM_CONFIG_PREFIX`. | The config directory is overridable by env var, the install directory is not. For the native binary, write the downloaded artefact straight into the target's `~/.local/bin`. |
-| **Codex CLI** | **Indirect.** `codex upgrade` delegates to `npm install -g @openai/codex@…` or `brew upgrade codex`; `NPM_CONFIG_PREFIX` covers the npm path. | Homebrew has no relocatable prefix, so a brew-managed target is not reachable this way. |
-| **Gemini CLI** | **Indirect.** `gemini update` runs `npm install -g @google/gemini-cli@latest`; `NPM_CONFIG_PREFIX` applies. | Same Homebrew caveat. |
+**Every harness surveyed accepts such an override except Claude Code's native
+binary**, and that exception is a single static file, so writing it with
+`install(1)` covers it. OpenClaw and Hermes Agent have first-class prefix flags;
+Codex CLI, Gemini CLI and Claude Code's npm path are reached indirectly through
+`NPM_CONFIG_PREFIX`; Homebrew-managed installs are not reachable at all. The
+per-harness table is in [the survey](./20261029-agent-harness-upgrade-survey.md#install-location-overrides).
 
-The npm mechanism was verified empirically rather than assumed. `NPM_CONFIG_PREFIX`,
-`PREFIX` and `--prefix` all redirect a global install, and the resulting layout is
-`<prefix>/lib/node_modules/<pkg>` with `<prefix>/bin/<name>`:
-
-```
-$ NPM_CONFIG_PREFIX=/tmp/a npm root -g
-/tmp/a/lib/node_modules
-$ NPM_CONFIG_PREFIX=$PREFIX_DIR npm install -g ./faketool-1.2.3.tgz
-<prefix>/bin/faketool -> ../lib/node_modules/faketool/cli.js
-<prefix>/lib/node_modules/faketool/{cli.js,package.json}
-```
-
-Two properties of that output are what make the redirect safe:
+The npm redirect was verified empirically rather than assumed, and two properties
+of the result are what make it safe:
 
 - The `bin` entry is a **relative** symlink (`../lib/node_modules/…`), so the tree
   is relocatable and resolves correctly when read from inside the target as
@@ -273,15 +274,10 @@ silent-failure mode distinct from the `execve` trap. A toolchain that bakes
 **absolute paths** into its output at install time will write paths beginning
 `/proc/1/root/…` — a prefix that does not exist inside the target container. The
 install reports success, the files are all present, and every entry point is
-broken.
-
-Hermes Agent is the case that exposes this, because it manages its Python
-environment with `uv`. Console scripts in `.venv/bin` get absolute shebangs and
-`pyvenv.cfg` records an absolute home path (astral-sh/uv#13350). `uv` provides
-`uv venv --relocatable` (env `UV_VENV_RELOCATABLE`), which rewrites both to
-relative paths, but it is **not** the stable default — relocatable-by-default
-ships only as a uv *preview* feature (astral-sh/uv#17770). It must be requested
-explicitly.
+broken. Any Python venv toolchain does this by default: console scripts get
+absolute shebangs and `pyvenv.cfg` records an absolute home. `uv venv
+--relocatable` rewrites both, but it is not the stable default and must be
+requested explicitly.
 
 Toolchains therefore fall into three classes, and the installer image must know
 which class its harness is in:
@@ -297,17 +293,9 @@ than the prefixes: a harness that finds itself via `HERMES_HOME` or
 `OPENCLAW_HOME` can be installed to *any* directory and then pointed at from
 inside the target, sidestepping absolute-path baking entirely.
 
-A cheap post-write assertion catches all three classes at once and belongs in the
-installer contract:
-
-```sh
-if grep -rq "$SANDBOX_INSTALLER_TARGET_ROOT" "$target" 2>/dev/null; then
-  echo "install baked an absolute /proc/1/root path" >&2; exit 126
-fi
-```
-
-Exit code 126 is reserved for this, mirroring the 125 reserved for failed
-namespace targeting.
+Exit code **126** is reserved for the post-write assertion that catches all three
+classes at once; the assertion itself is part of the
+[Installer Contract](#installer-contract).
 
 Consequences for the contract:
 
@@ -343,15 +331,8 @@ Much of the target deployment for this feature is a cluster where sandboxes have
 no outbound internet access. That raises two separate questions: can the
 harness's installer be pointed at an internal **site mirror**, and can a
 **specific version** be pinned? The answers differ sharply, and no harness in the
-survey answers "yes, fully offline" to both.
-
-| Harness | Site mirror | Version pinning | True air-gap (no network at all) |
-|---|---|---|---|
-| **OpenClaw** | **Yes, explicit.** `OPENCLAW_INSTALL_NPM_REGISTRY` "replaces `https://registry.npmjs.org`"; `OPENCLAW_INSTALL_BUN_PIN_URL` and `OPENCLAW_INSTALL_BUN_RELEASE_BASE_URL` redirect the Bun fork runtime. The npm/pnpm/bun path also honours `NPM_CONFIG_REGISTRY`. | **Yes.** `--version <version\|dist-tag\|spec>` (default `latest`), `OPENCLAW_VERSION`, `--tag`; git installs accept a 40-character commit SHA. Sealed releases verify a published Bun pin hash and fail on mismatch. | **No.** The installer scripts "do not support fully offline installation"; pins, archives and metadata require network. Source installs require network unless a local pnpm lockfile is used. |
-| **Claude Code** | **No mirror for the native installer** — `curl -fsSL https://claude.ai/install.sh \| bash` is a fixed URL. The npm path inherits `NPM_CONFIG_REGISTRY`. | **Yes.** `claude install [version]`; channel via `autoUpdatesChannel`; npm `@<version>`. | **No.** anthropics/claude-code#39847 requested an offline installer and was closed unimplemented; it also notes that authentication is required even in offline settings. |
-| **Codex CLI** | No harness-level mirror; inherits npm's. The Homebrew path can use `HOMEBREW_BOTTLE_DOMAIN` / `HOMEBREW_API_DOMAIN`. | **Yes.** `npm install -g @openai/codex@<version>`. | No documented support and no tracked request. |
-| **Gemini CLI** | No harness-level mirror; inherits npm's. | **Yes.** `npm install -g @google/gemini-cli@<version>`. | No documented support and no tracked request. |
-| **Hermes Agent** | Not at harness level. Its `uv`-managed Python environment inherits `UV_INDEX_URL`, `UV_EXTRA_INDEX_URL`, `UV_NO_INDEX`, `UV_FIND_LINKS`, `UV_OFFLINE`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR` and `UV_PYTHON_DOWNLOADS`. | Via `uv.lock` or `--exact`, or a git SHA for source installs. | **No.** NousResearch/hermes-agent#17696 is **open**: "Hermes Agent cannot be deployed in offline or air-gapped environments … installation cannot be completed at all." The FAQ's affirmative "can I use it offline" answer concerns *runtime* model endpoints (`hermes model` → Custom endpoint), not installation. |
+survey answers "yes, fully offline" to both. The per-harness table is in [the
+survey](./20261029-agent-harness-upgrade-survey.md#air-gapped-and-mirrored-environments).
 
 Two conclusions follow, and both shape this proposal.
 
@@ -372,28 +353,12 @@ strongest single argument for the design, and it is why the offline form is
 preferred in [Install-location overrides](#install-location-overrides) even where
 a working mirror exists.
 
-For the npm-distributed harnesses a fully local install is achievable and should
-be the default recommendation: bake `npm pack` tarballs into the installer image
-and install with `--offline`. Both mechanisms were verified empirically —
-`NPM_CONFIG_REGISTRY` overrides the registry, and `--offline` puts npm in
-`only-if-cached` mode so it fails with `ENOTCACHED` rather than reaching the
-network:
-
-```
-$ NPM_CONFIG_REGISTRY=https://nexus.internal/repository/npm/ npm config get registry
-https://nexus.internal/repository/npm/
-
-$ npm install --offline --dry-run <uncached-pkg>
-npm error code ENOTCACHED
-npm error request to https://registry.npmjs.org/<pkg> failed:
-npm error cache mode is 'only-if-cached' but no cached response is available.
-```
-
-`--offline` requires a populated npm cache (`npm config get cache`, itself
-overridable); a tarball install requires none, which is why the tarball form is
-preferred. For `uv`-managed harnesses the equivalent is `UV_NO_INDEX` with
-`UV_FIND_LINKS` pointing at a local wheelhouse, plus `UV_PYTHON_INSTALL_DIR`
-pre-populated if the interpreter must also come from the image.
+For the npm-distributed harnesses a fully local install is achievable and is the
+recommended default: bake `npm pack` tarballs into the installer image and install
+with `--offline`. A tarball install needs no npm cache, which `--offline` does, so
+the tarball form is preferred; for `uv`-managed harnesses the equivalent is
+`UV_NO_INDEX` with `UV_FIND_LINKS` pointing at a local wheelhouse. The verified
+transcripts are in [the survey](./20261029-agent-harness-upgrade-survey.md#air-gapped-and-mirrored-environments).
 
 **Version pinning is universal and should be treated as mandatory.** Every harness
 surveyed can install an exact version. An installer image that resolves `latest`
@@ -403,146 +368,132 @@ the `postUpgrade` version assertion would have nothing stable to assert against.
 Operators should pin explicitly, and the installer image tag should be the record
 of what was pinned.
 
-### Example installer image: Hermes Agent
-
-Hermes Agent is the hardest case in the survey and therefore the most instructive
-example: it is not distributed through npm or pip, its Python environment is managed
-by `uv` (so it falls in the *relocatable only on request* class), its container
-installs refuse `hermes update`, and its air-gap support is an open issue. It is
-also the cleanest install-location story — `HERMES_HOME` plus `--dir`, and a
-self-contained directory rather than a shared system prefix.
-
-This is what an operator's installer image looks like for it. The image is the
-payload carrier: everything needed is baked in, so the install requires no egress
-from the sandbox.
-
-```dockerfile
-# syntax=docker/dockerfile:1
-# Base must match the target's libc family. Hermes Agent's venv and any native
-# wheels are built against glibc; a musl base would produce unusable binaries.
-FROM python:3.12-slim-bookworm
-
-ARG HERMES_VERSION=1.9.2
-
-COPY --from=ghcr.io/astral-sh/uv:0.9.11 /uv /uvx /usr/local/bin/
-
-# A pinned source tree, a local wheelhouse and a pre-downloaded interpreter — all
-# baked in, so nothing is fetched at upgrade time.
-COPY payload/hermes-src/       /payload/hermes-src/
-COPY payload/wheelhouse/       /payload/wheelhouse/
-COPY payload/python/           /payload/python/
-
-ENV HERMES_VERSION=${HERMES_VERSION}
-COPY install.sh /install.sh
-ENTRYPOINT ["/install.sh"]
-```
-
-The vendor's own `install-hermes.sh` is deliberately *not* used here: it fetches
-over the network, which is exactly what an air-gapped cluster cannot do (see
-[Air-gapped and mirrored environments](#air-gapped-and-mirrored-environments)). The
-script below reproduces what it does — unpack a pinned tree, build the `uv`
-environment, place it under `HERMES_HOME` — from a payload the image already
-carries. Where a mirror *is* reachable, baking the vendor script in and calling it
-with `--dir "$SANDBOX_INSTALLER_TARGET_ROOT/opt/hermes"` is the shorter form.
-
-```sh
-#!/bin/sh
-set -eu
-
-version="${HERMES_VERSION:?HERMES_VERSION must be pinned in the image}"
-root="${SANDBOX_INSTALLER_TARGET_ROOT:?}"
-
-# Reserved exit 125: prove namespace targeting took effect before writing anything.
-# Without it an unsupporting runtime yields a silent no-op that reports success.
-[ /proc/1/root -ef / ] && { echo "namespace targeting unavailable" >&2; exit 125; }
-
-# Build entirely in the installer's own filesystem. Nothing here executes a binary
-# from under $root -- that is the execve trap, and it would silently install into
-# the ephemeral container instead of the sandbox.
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/hermes"
-cp -a /payload/hermes-src/. "$work/hermes/"
-
-# Offline uv: no index, local wheelhouse only, interpreter from the image.
-export UV_NO_INDEX=1
-export UV_FIND_LINKS=/payload/wheelhouse
-export UV_OFFLINE=1
-export UV_CACHE_DIR="$work/.uv-cache"
-export UV_PYTHON_INSTALL_DIR=/payload/python
-export UV_PYTHON_DOWNLOADS=never
-
-# Relocatable is NOT uv's stable default. Without it, console scripts in .venv/bin
-# get absolute shebangs and pyvenv.cfg records an absolute home -- both prefixed
-# /proc/1/root, which does not exist inside the target.
-export UV_VENV_RELOCATABLE=1
-uv venv --relocatable "$work/hermes/.venv"
-uv pip install --python "$work/hermes/.venv/bin/python" \
-  -r "$work/hermes/requirements.txt"
-
-# Stage into a versioned directory beside the live one. Writing over a running
-# binary fails with ETXTBSY, and a half-copied tree leaves the harness unusable.
-mkdir -p "$root/opt"
-release="$root/opt/hermes-$version"
-rm -rf "$release"
-mkdir -p "$release"
-cp -a "$work/hermes/." "$release/"
-printf '%s\n' "$version" > "$release/INSTALLER_VERSION"
-
-# Switch atomically: rename(2) over the symlink. The running process keeps its old
-# inode until postUpgrade restarts it.
-ln -s "hermes-$version" "$root/opt/.hermes-current.new"
-mv -f "$root/opt/.hermes-current.new" "$root/opt/hermes-current"
-
-# Reserved exit 126: assert no absolute /proc/1/root path was baked into the result.
-if grep -rq "$root" "$release" 2>/dev/null; then
-  echo "install baked an absolute $root path" >&2
-  exit 126
-fi
-```
-
-The matching `postUpgrade` hook runs inside the sandbox through envd, where
-`/opt/hermes-current` is a real path and the harness's own interpreter and service
-manager are available — no capability needed:
-
-```yaml
-lifecycle:
-  postUpgrade:
-    exec:
-      command:
-        - /bin/sh
-        - -c
-        - |
-          set -eu
-          export HERMES_HOME=/opt/hermes-current
-          [ "$(cat "$HERMES_HOME/INSTALLER_VERSION")" = "1.9.2" ]
-          "$HERMES_HOME/.venv/bin/hermes" --version | grep -F 1.9.2
-          "$HERMES_HOME/.venv/bin/hermes" gateway restart
-    timeoutSeconds: 120
-```
-
-What this example demonstrates, and what generalises to any harness:
-
-- **Self-contained directory over shared prefix.** `/opt/hermes-<version>` plus a
-  `hermes-current` symlink cannot clobber an unrelated dependency of the target, is
-  trivially removable, and makes the relocatability class obvious. `HERMES_HOME` is
-  how the harness finds itself, so the target needs no path baked into it.
-- **Payload in the image, version pinned at build time.** `HERMES_VERSION` is an
-  image build arg, so the image tag *is* the record of what was installed, and the
-  `postUpgrade` assertion has something stable to assert against.
-- **Both reserved exit codes earned their place.** 125 catches the runtime that
-  does not implement targeting; 126 catches the `uv` default that would have
-  shipped a broken install reported as success.
-- **Nothing is executed from under the target rootfs.** `uv`, `cp`, `ln` and `mv`
-  all come from the installer image.
-- **Restart and verification are `postUpgrade`'s job**, not the installer's.
-- For an npm-distributed harness the same shape applies with `NPM_CONFIG_PREFIX`
-  and a `npm pack` tarball in place of `uv` and the wheelhouse — see
-  [Run your own tooling, never the target's](#run-your-own-tooling-never-the-targets).
-
+The worked example that puts all of this together — a complete installer image for
+Hermes Agent, the hardest case in the survey, with the `postUpgrade` hook that goes
+with it — is in [the survey](./20261029-agent-harness-upgrade-survey.md#example-installer-image-hermes-agent).
+The [Test Plan](#test-plan) runs it as an E2E control.
 ## Proposal
 
 ### Overview
+
+An `InstallerUpdate` upgrade is **two steps**, and the default path exists to keep
+them apart. Every harness surveyed upgrades the same way — files are replaced under
+an install prefix, then the long-running process is restarted — but in a sandbox the
+two steps land on opposite sides of a mount namespace boundary, need different
+privileges, and fail differently.
+
+**Step 1 — Replace the harness files.** Performed by the injected ephemeral
+container, in the `Installing` state. It runs *outside* the target's mount
+namespace, so it can do file I/O into the target through `/proc/1/root` but cannot
+correctly execute anything it finds there. It therefore runs only tooling from its
+own image — a package manager, the vendor's prefix-aware installer, `install(1)` —
+with the install location redirected into the target. (The single exception is the
+operator opt-in described under step 2, which enters the target's mount namespace
+with `nsenter` before executing anything.) Three rules make that safe:
+
+- *Never overwrite a running executable in place.* Writing to a mapped binary fails
+  with `ETXTBSY`, and a half-copied tree leaves the harness unusable. Stage beside
+  the live tree and then `rename(2)` over it: a symlink flip for a self-contained
+  directory, an atomic replace for a single file.
+- *Never bake the prefix into the result.* Anything recorded with an absolute
+  `/proc/1/root` path is broken once read from inside the target, which is why exit
+  code 126 is reserved for the post-write assertion.
+- *Report why, not just whether.* The controller observes this step only through
+  `pod.status.ephemeralContainerStatuses[].state.terminated.exitCode`, so the
+  reserved codes 125 and 126 are the installer's sole channel for distinguishing
+  "the runtime cannot do namespace targeting" and "the toolchain is not
+  relocatable" from an ordinary installer bug.
+
+When step 1 succeeds, **the new files exist and nothing is running them yet.** The
+harness process still has the old inodes mapped, so the sandbox is still serving
+the old version. That is the state the design deliberately pauses in, and it is why
+a successful `Installing` is not a successful upgrade.
+
+**Step 2 — Restart the harness process.** There are two ways to perform it. The
+design defaults to the first; the second is an explicit operator opt-in that the
+controller never generates.
+
+**Way A — `postUpgrade` hook (default).** The existing
+`spec.lifecycle.postUpgrade.exec` runs in the `PostUpgrade` state. envd executes it
+*inside* the target container as root
+(`pkg/controller/sandbox/core/lifecycle_handler.go:49`, `:106`), so it has the
+target's real rootfs, `PATH`, interpreter, service manager and identity — no
+capability grant, and none of the `execve` hazards that constrain step 1. It does
+two things:
+
+- **Restart**, so the new files take effect — the harness's own service manager
+  (`openclaw … restart`, `hermes gateway restart`), or a signal to the supervisor
+  that started it.
+- **Assert the new version**, so that a step-1 no-op fails the batch instead of
+  being reported as success. This is why the test plan treats a version-asserting
+  `postUpgrade` as required rather than recommended.
+
+Because it runs after the installer has already exited successfully, a failure
+here is reported as `PostUpgradeFailed` with the new files in place — recoverable
+by re-running the hook.
+
+**Way B — `nsenter` from the ephemeral container (opt-in).** The installer script
+itself joins the target's namespaces and runs the restart, typically
+`nsenter -t 1 -m -p -i -n -- sh -c 'cd / && <harness> restart'` after the
+`rename(2)`. `setns(CLONE_NEWNS)` is the only mechanism that lets the installer
+execute a binary from under the target rootfs correctly, since the loader and
+shared libraries then resolve in the target's mount namespace rather than the
+installer's. The operator writes this into `installer.command` and must grant
+`CAP_SYS_ADMIN` themselves through `installer.securityContext.capabilities.add`;
+[Validation](#validation) rejects `privileged: true` but deliberately permits an
+explicit `SYS_ADMIN` so this stays reachable. What the operator accepts in
+exchange:
+
+- **The two steps collapse into one container.** The restart happens before the
+  installer exits, so its outcome is folded into the installer's exit code and
+  reported as `Installing` / `InstallingFailed` — not `PostUpgrade`. Installer
+  failures are never retried, so a transient restart failure leaves the sandbox
+  fail-stopped where way A would have allowed a hook re-run.
+- **`CAP_SYS_ADMIN` collapses the containment bound.** Blast radius is no longer
+  limited to what the shared PID namespace allows; see
+  [Alternatives](#alternatives) and [Risks and Mitigations](#risks-and-mitigations).
+- **Mechanical fragility.** `nsenter` must be present in the installer image
+  (util-linux), the target's `/proc` and `/dev` must be usable from the new mount
+  namespace, and `-m` alone leaves `cwd` and root pointing at stale paths — hence
+  the full `-t 1 -m -p -i -n` plus an explicit `cd /`.
+
+Way B is the escape hatch for restarts that cannot be expressed as something
+`postUpgrade` can run — in practice an operator who wants to drive the harness's
+own `update` entry point end to end. That is a narrow case, and the survey shows it
+is often refused outright for container-managed installs, so it is documented
+rather than encouraged. Whichever way performs the restart, keep a
+version-asserting `postUpgrade`: it is the only channel that runs inside the
+target with no capability at all, and it is what turns a silent step-1 no-op into
+a fail-stopped batch.
+
+Step 1 cannot perform the restart without way B's `nsenter`, and step 2 cannot
+perform the file replacement at all. The default split reflects that; the table
+shows what each choice costs:
+
+| | Step 1 — replace the harness files | Step 2, way A — `postUpgrade` (default) | Step 2, way B — `nsenter` (opt-in) |
+|---|---|---|---|
+| Runs in | The ephemeral container, outside the target's mount namespace | The target container itself, via envd | The ephemeral container, joined into the target's namespaces by `setns` |
+| Can execute target binaries | No — `execve` resolves the loader and libraries in the installer's namespace | Yes, it *is* the target | Yes — that is what `setns(CLONE_NEWNS)` buys |
+| Capability needed | `SYS_PTRACE`, to read `/proc/1/root` | None | `SYS_PTRACE` (injected) plus `SYS_ADMIN` (operator-granted) |
+| Configured through | `updateStrategy.installer.command` | `spec.lifecycle.postUpgrade.exec` | `updateStrategy.installer.command` and `installer.securityContext` |
+| Payload | Carried in the installer image | Already present in the target | Already present in the target |
+| Failure leaves | A possibly half-written filesystem; not retried | Files in place but not serving; recoverable by re-running the hook | Files in place, restart attempted; **not retried** |
+| Condition reason | `Installing` / `InstallingFailed` | `PostUpgrade` / `PostUpgradeFailed` | `Installing` / `InstallingFailed` |
+
+The split also matches what the harnesses do themselves: OpenClaw exposes
+`--no-restart` for exactly this separation, and
+[anthropics/claude-code#20361](https://github.com/anthropics/claude-code/issues/20361)
+is what happens when file replacement and process restart are conflated.
+
+One ordering constraint ties the two steps back to the sandbox's own lifecycle: the
+restart must come last, and it must not kill PID 1. A container restart discards
+the writable layer that step 1 just wrote into — see
+[PID 1 in the target container](#pid-1-in-the-target-container). Under way A the
+controller enforces the ordering, because `postUpgrade` runs only after the
+installer has terminated; under way B the ordering lives entirely inside the
+operator's own script.
+
+Everything else is unchanged SUO batching wrapped around those two steps:
 
 ```
 SandboxUpdateOps                       Sandbox controller                kubelet / runtime
@@ -567,7 +518,7 @@ SandboxUpdateOps                       Sandbox controller                kubelet
                                      4. PreUpgrade hook (envd, inside sandbox)
                                      5. verify target container Running
                                      6. POST pods/<name>/ephemeralcontainers
-                                          name: installer-<hash8>-<attempt>
+                                          name: installer-<hash8>
                                           image/command/env/securityContext from spec
                                           targetContainerName: <resolved>
                                                                     |
@@ -634,8 +585,8 @@ spec:
       image: registry.example.com/harness-installer:1.4.0
 
       # Optional. argv-style entrypoint; when omitted the image's ENTRYPOINT and
-      # CMD are used. Must be idempotent — it may be re-executed on a new attempt
-      # after an infrastructure failure such as an image pull error.
+      # CMD are used. Must be idempotent — a later ops object re-installs over
+      # whatever a previous one left in the target's writable layer.
       command:
         - /install.sh
 
@@ -661,10 +612,10 @@ spec:
       # Optional. Defaults to IfNotPresent.
       imagePullPolicy: IfNotPresent
 
-      # Optional. Bounds a single install attempt. When the installer container
-      # has been running longer than this the sandbox is marked InstallingFailed;
-      # the container itself cannot be stopped — see Risks and Mitigations.
-      # Defaults to 600.
+      # Optional. Bounds the install, measured from when the sandbox entered the
+      # Installing state, so it also covers an image pull that never completes.
+      # When it expires the sandbox is marked InstallingFailed; the container
+      # itself cannot be stopped — see Risks and Mitigations. Defaults to 600.
       timeoutSeconds: 900
 
   # patch is deliberately omitted. Under InstallerUpdate the payload comes from
@@ -701,7 +652,7 @@ What the manifest cannot express, field by field:
 | `installer.env` | no | — | `+listType=map` keyed on `name`. Names with the reserved `SANDBOX_INSTALLER_` prefix are rejected. |
 | `installer.securityContext` | no | `capabilities.add: ["SYS_PTRACE"]`, `runAsUser` inherited from the target when set | `privileged: true` is rejected. A supplied value overrides the defaults wholesale. |
 | `installer.imagePullPolicy` | no | `IfNotPresent` | Enum `Always;IfNotPresent;Never`. |
-| `installer.timeoutSeconds` | no | `600` | `Minimum=1`. Bounds one attempt, not the whole retry sequence. |
+| `installer.timeoutSeconds` | no | `600` | `Minimum=1`. Bounds the install from entry into `Installing`, so it also covers an image pull that never completes. |
 
 The Go declaration itself is unchanged in shape from the existing
 `SandboxUpdateOpsStrategy`: one optional pointer field, `Installer
@@ -846,7 +797,6 @@ the `SANDBOX_INSTALLER_` prefix.
 | `SANDBOX_INSTALLER_TARGET_ROOT` | `/proc/1/root` — absolute prefix of the target container's filesystem. |
 | `SANDBOX_INSTALLER_TARGET_CONTAINER` | Resolved target container name. |
 | `SANDBOX_INSTALLER_PATCH_VERSION` | `spec.upgradePolicy.patchVersion`. |
-| `SANDBOX_INSTALLER_ATTEMPT` | 1-based attempt counter. |
 | `SANDBOX_NAME`, `SANDBOX_NAMESPACE`, `SANDBOX_UID` | Identity of the sandbox. |
 
 The installer command is expected to:
@@ -879,7 +829,12 @@ The installer command is expected to:
    covers this; **exit code 126 is reserved** for it, so the controller can
    distinguish "targeting never worked" (125) from "the install landed but is
    unusable" (126) from an ordinary installer bug.
-5. **Be idempotent.** It may run more than once.
+5. **Be idempotent.** The controller runs a given `patchVersion` exactly once and
+   never re-injects, so this is not about surviving a retry. It is about surviving
+   a *failure*: a non-zero exit may leave the target half-updated, and the
+   operator's recovery is a new ops object whose installer meets that state. The
+   same image may also be applied to a sandbox that a previous, different ops
+   already installed into.
 6. **Exit 0 on success.** stdout and stderr are truncated into the `Upgrading`
    condition message, following the existing hook behaviour
    (`pkg/controller/sandbox/core/upgrade_control.go:516`).
@@ -913,6 +868,12 @@ service. The contract's position is that stopping and restarting the workload is
 `postUpgrade`'s job rather than the installer's, because `postUpgrade` runs after
 the installer has exited and after the controller has observed its exit code — a
 restart there is visible and can fail the batch.
+
+Guaranteeing the PID-1 shape by construction rather than by image authoring is out
+of scope here and tracked by the dynamic env injection proposal
+([openkruise/agents#1130](https://github.com/openkruise/agents/pull/1130)), which
+already rewrites `containers[0]`'s command with a wrapper script — see
+[Non-Goals/Future Work](#non-goalsfuture-work).
 
 **The target container must own its PID namespace.** If the resolved Pod spec sets
 `shareProcessNamespace: true` or `hostPID: true`, PID 1 is the `pause` container or
@@ -977,21 +938,23 @@ install -m 0755 /payload/claude "$SANDBOX_INSTALLER_TARGET_ROOT/root/.local/bin/
 This is why the installer image is the payload *carrier* and not merely a file
 source: it brings a package manager, a known libc, and optionally the vendor's own
 installer, so the operator reuses tested install logic instead of reimplementing
-it as `cp -a`. The four consequences in
-[Install-location overrides](#install-location-overrides) apply — never query the
-prefix from inside the installer, match the libc family, resolve "home" against
-the target rootfs, and prefer the offline form.
+it as `cp -a`. The five consequences in
+[Relocatability is the real constraint](#relocatability-is-the-real-constraint)
+apply — never query the prefix from inside the installer, match the libc family,
+resolve "home" against the target rootfs, prefer the offline form, and prefer a
+self-contained directory over a shared system prefix.
 
 The corollary is that **`nsenter` is not required, and must not be a controller
 default.** Anything that genuinely needs to run inside the target's mount
 namespace belongs in `spec.lifecycle.postUpgrade.exec`, which is executed by envd
 inside the sandbox container
-(`pkg/controller/sandbox/core/lifecycle_handler.go:70`) and therefore already has
+(`pkg/controller/sandbox/core/lifecycle_handler.go:106`) and therefore already has
 the target's rootfs, PATH, service manager and root identity with no additional
 capability. Operators who nonetheless want `nsenter` in the installer command can
 write it there, but must grant `CAP_SYS_ADMIN` themselves via
 `installer.securityContext` and accept the containment trade-off described in
-[Alternatives](#alternatives).
+[Alternatives](#alternatives). [Overview](#overview) documents this as *way B* of
+the restart step, alongside what it costs in retry and failure-reporting terms.
 
 #### Payload staging
 
@@ -1009,13 +972,13 @@ cp -a /payload/. "$stage/"
 `postUpgrade` then consumes that directory — unpacking a tarball, running a
 vendor installer against a local path, or simply asserting the version the
 installer already placed. The staging directory is keyed by `patchVersion` so
-retries and successive operations cannot collide, and removing it is a normal
-`postUpgrade` step.
+successive operations cannot collide, and removing it is a normal `postUpgrade`
+step.
 
 Restarting the harness and asserting the new version are deliberately *not* the
 installer container's job. They belong in `spec.lifecycle.postUpgrade.exec`, which
 runs inside the sandbox container via envd as root
-(`pkg/controller/sandbox/core/lifecycle_handler.go:79`) and therefore uses the
+(`pkg/controller/sandbox/core/lifecycle_handler.go:49`) and therefore uses the
 sandbox's own service manager and PATH. A failing `postUpgrade` drives the sandbox
 to `PostUpgradeFailed` and fail-stops the batch, which makes it the verification
 gate for the whole operation.
@@ -1134,39 +1097,50 @@ transition directly to `PreUpgrade`; the abandonment check keys off
 3. **Require a live target.** The Pod must be `Running` and the target's
    `ContainerStatus.State.Running` must be non-nil. Otherwise wait — do not fail,
    since a transient restart should not abort the batch.
-4. **Count prior attempts** by scanning `pod.Spec.EphemeralContainers` for names
-   prefixed `installer-<hash8(patchVersion)>`. Attempt numbering and the retry cap
-   are derived from this list, so no extra status field is needed. Exceeding the
-   cap (`--installer-max-attempts`, default 3) sets `InstallingFailed`.
-5. **Inject.** Append one `EphemeralContainer` named
-   `installer-<hash8>-<attempt>`, carrying the resolved image, command, env,
-   security context and image pull policy, with `TargetContainerName` set. Write it
-   through the `ephemeralcontainers` subresource — the same pattern already used
-   for `pods/resize` at `pkg/utils/inplaceupdate/inplace_update.go:524`. A
-   `Conflict` means the Pod changed underneath us: requeue and retry the whole
-   step, recomputing from the fresh Pod rather than injecting twice.
+4. **Do not inject twice.** Scan `pod.Spec.EphemeralContainers` for the exact name
+   `installer-<hash8(patchVersion)>`. If it is already present, skip injection and
+   go straight to step 6. The name is a deterministic function of `patchVersion`,
+   so a requeue after a partial write cannot append a second container — that
+   guard is the whole reason the name is derived rather than generated, and it
+   replaces any need for an attempt counter.
+5. **Inject.** Append one `EphemeralContainer` named `installer-<hash8>`, carrying
+   the resolved image, command, env, security context and image pull policy, with
+   `TargetContainerName` set. Write it through the `ephemeralcontainers`
+   subresource — the same pattern already used for `pods/resize` at
+   `pkg/utils/inplaceupdate/inplace_update.go:524`. A `Conflict` means the Pod
+   changed underneath us: requeue and retry the whole step, recomputing from the
+   fresh Pod rather than injecting twice. This is one injection per
+   `patchVersion`; there is no second attempt.
 6. **Wait and evaluate** `pod.Status.EphemeralContainerStatuses` for the injected
-   name:
-   - `State.Waiting.Reason == "ImagePullBackOff" | "ErrImagePull"` → retryable;
-     re-inject on the next attempt (the failed entry stays, since ephemeral
-     containers cannot be removed).
+   name. Every outcome below is terminal for this `patchVersion` — the controller
+   never re-injects, because an ephemeral container cannot be removed, restarted or
+   replaced, so a second one would only add a second entry to `pod.spec` without
+   undoing the first. Recovery is a new ops object, which carries a new
+   `patchVersion` and therefore a new container name.
+   - `State.Waiting.Reason == "ImagePullBackOff" | "ErrImagePull"` → keep waiting.
+     The kubelet retries the pull on its own backoff and no new ephemeral container
+     is involved, so this needs no controller-side retry logic. It is bounded by
+     the same `installer.timeoutSeconds` deadline, measured from when the
+     `Upgrading` condition entered the `Installing` reason rather than from
+     `State.Running.StartedAt`, which never exists for a container that never
+     started.
    - `State.Terminated.ExitCode == 0` → success; proceed.
    - `State.Terminated.ExitCode == 125` → `InstallingFailed`, message "container
-     runtime does not support namespace targeting"; **not** retried, because
-     retrying cannot change the runtime's capability.
+     runtime does not support namespace targeting". Reported distinctly because no
+     change to the installer image can fix it — the runtime is what lacks the
+     capability.
    - `State.Terminated.ExitCode == 126` → `InstallingFailed`, message "installer
-     baked an absolute `/proc/1/root` path into the target"; **not** retried,
-     because the same toolchain will bake the same path. This is the
-     non-relocatable-toolchain failure described in
+     baked an absolute `/proc/1/root` path into the target". The same toolchain
+     would bake the same path. This is the non-relocatable-toolchain failure
+     described in
      [Relocatability is the real constraint](#relocatability-is-the-real-constraint),
      and reporting it distinctly is what stops an operator debugging the runtime
      instead of their installer image.
-   - Any other non-zero exit → `InstallingFailed` with truncated stdout/stderr;
-     not retried, because a failed installer may have left the target filesystem
-     half-updated and blindly re-running it is not obviously safe.
-   - `State.Running` past `installer.timeoutSeconds` (measured from
-     `State.Running.StartedAt`) → `InstallingFailed`, message noting the container
-     cannot be terminated.
+   - Any other non-zero exit → `InstallingFailed` with truncated stdout/stderr. A
+     failed installer may have left the target filesystem half-updated, so
+     re-running it is not obviously safe.
+   - `State.Running` past `installer.timeoutSeconds` → `InstallingFailed`, message
+     noting the container cannot be terminated.
 7. **Record completion.** Copy `spec.upgradePolicy.patchVersion` into
    `status.completedPatchVersion`, then fall through to `PostUpgrade`.
 
@@ -1183,8 +1157,9 @@ both of which remain correct because `spec.template` was never modified.
 `get`, `patch`, `update`, alongside the existing `pods/resize` and `pods/status`
 subresource block at lines 38-46.
 
-**Flag.** `--installer-max-attempts` (default 3) on the sandbox controller,
-registered next to the existing `--checkpoint-id-annotation-key` flag.
+No new controller flag is introduced. There is no attempt counter to bound,
+because the controller injects at most one ephemeral container per
+`patchVersion`; `installer.timeoutSeconds` is the only knob.
 
 ### Validation
 
@@ -1275,12 +1250,14 @@ operator's choice.
   (`pkg/controller/sandboxupdateops/patch.go:77`), so an empty patch never
   short-circuits a sandbox to `NoNeedUpdate`. The installer-aware check replaces
   that logic anyway.
-- **Ephemeral containers accumulate permanently.** Each attempt appends an entry to
-  `pod.spec.ephemeralContainers` that can never be removed, along with its
-  `ephemeralContainerStatuses` entry. This is bounded by `--installer-max-attempts`
-  and by the one-ops-per-namespace rule, but it does mean a Pod that is installed
-  repeatedly grows. The names are deterministic per patch version so the growth is
-  auditable.
+- **Ephemeral containers accumulate permanently.** Each install appends an entry
+  to `pod.spec.ephemeralContainers` that can never be removed, along with its
+  `ephemeralContainerStatuses` entry. Because the name is a deterministic function
+  of `patchVersion` and the controller injects at most once per `patchVersion`, the
+  growth is exactly one entry per successful or failed operation applied to that
+  Pod — bounded in practice by the one-ops-per-namespace rule, and auditable
+  because the names encode the patch version. There is no attempt counter, so a
+  single operation can never append more than one.
 - **`RestartPolicy` must not be set** on the injected container. Ephemeral
   containers are never restarted; requesting otherwise is rejected by the API
   server.
@@ -1290,9 +1267,12 @@ operator's choice.
   controller copies into the condition message.
 - **Container name validity.** The generated name must be a DNS label: lowercase
   alphanumerics and `-`, at most 63 characters, and unique across the Pod's
-  containers, init containers and ephemeral containers. `installer-<8 hex>-<n>`
+  containers, init containers and ephemeral containers. `installer-<8 hex>`
   satisfies this; hash `patchVersion` rather than embedding it, since the value is
-  opaque and today is a 36-character UID, which would crowd the budget.
+  opaque and today is a 36-character UID, which would crowd the budget. Deriving
+  the name from `patchVersion` is also what makes it unique per operation: two
+  successive ops objects produce two different names, and one operation can never
+  produce two.
 - **No probes, no ports, no lifecycle hooks** on the installer container — all
   rejected by the API server. Readiness is judged solely from
   `ephemeralContainerStatuses`.
@@ -1335,7 +1315,8 @@ because an operator who has not hit it will otherwise reach for the obvious
 asserting the new version is the only reliable detector, which is why the test
 plan treats a version-asserting `postUpgrade` as required rather than
 recommended. `nsenter` is the deliberate escape hatch for operators who must run
-the vendor updater, at the cost of `CAP_SYS_ADMIN`.
+the vendor updater, at the cost of `CAP_SYS_ADMIN` — way B in
+[Overview](#overview).
 
 **The toolchain bakes absolute paths, so the install lands but is unusable.**
 Distinct from both risks above and harder to spot: namespace targeting worked, the
@@ -1402,12 +1383,16 @@ supplying a sandbox image. Documented explicitly so it is a conscious choice.
 
 **Partial install leaves the sandbox inconsistent.** A non-zero exit mid-copy
 means some files are new and some are old.
-*Mitigation:* no automatic retry on installer failure — the sandbox goes to
-`InstallingFailed`, gets the `agents.kruise.io/upgrade-failed` label, consumes
-`maxUnavailable` budget and fail-stops the batch, matching existing SUO semantics.
-The contract requires idempotent installers and recommends staging into a
-temporary directory and switching atomically. Recovery is the operator's decision:
-delete and recreate the sandbox, or re-run a corrected ops.
+*Mitigation:* the controller injects at most one ephemeral container per
+`patchVersion` and never re-injects, so there is no automatic retry to make the
+inconsistency worse. The sandbox goes to `InstallingFailed`, gets the
+`agents.kruise.io/upgrade-failed` label, consumes `maxUnavailable` budget and
+fail-stops the batch, matching existing SUO semantics. The contract requires
+idempotent installers and recommends staging into a temporary directory and
+switching atomically, so the common failure leaves the live tree untouched rather
+than half-written. Recovery is the operator's decision: delete and recreate the
+sandbox, or re-run a corrected ops — which carries a new `patchVersion` and
+therefore a new container name.
 
 **Result is not durable across Pod replacement.** See
 [Durability](#durability-of-the-result).
@@ -1461,7 +1446,7 @@ reasons:
   PID namespace no longer holds.
 - **The same result is available for free.** `postUpgrade` already executes
   inside the target's mount namespace via envd
-  (`pkg/controller/sandbox/core/lifecycle_handler.go:70`) as root, needing no
+  (`pkg/controller/sandbox/core/lifecycle_handler.go:49`) as root, needing no
   capability at all. Anything `nsenter` would enable belongs there.
 - **Mechanical fragility.** `nsenter` must be present in the installer image
   (util-linux), the target's `/proc` and `/dev` must be usable from the new mount
@@ -1476,11 +1461,12 @@ reasons:
 
 `nsenter` therefore remains an operator opt-in expressed through their own
 `installer.command` and `installer.securityContext`, documented but never
-generated.
+generated. [Overview](#overview) records it as *way B* of the restart step, with
+the retry and reporting consequences an operator takes on by choosing it.
 
 **Executing the installer through envd inside the sandbox container.** This is
 what `lifecycle.*Upgrade.exec` already does
-(`pkg/controller/sandbox/core/lifecycle_handler.go:44`). It cannot carry a
+(`pkg/controller/sandbox/core/lifecycle_handler.go:106`). It cannot carry a
 payload, cannot bring its own toolchain, and shares the workload's failure domain.
 Retained in this design for the restart-and-verify step, where it is the right
 tool.
@@ -1571,10 +1557,14 @@ existing tables per the repository's test rules):
   injection.
 - Status evaluation: exit 0 → `CompletedPatchVersion` set and advance to
   `PostUpgrade`; exit 125 → `InstallingFailed` with the namespace-targeting
-  message, no retry; exit 126 → `InstallingFailed` with the absolute-path message,
-  no retry; exit 1 → `InstallingFailed`
-  with truncated stdout/stderr, no retry; `ImagePullBackOff` → retried up to the
-  cap then `InstallingFailed`; running past `timeoutSeconds` → `InstallingFailed`.
+  message; exit 126 → `InstallingFailed` with the absolute-path message; exit 1 →
+  `InstallingFailed` with truncated stdout/stderr; `ImagePullBackOff` → stays in
+  `Installing` until the deadline, then `InstallingFailed`; running past
+  `timeoutSeconds` → `InstallingFailed`.
+- Single-injection guarantee: reconciling a sandbox whose Pod already contains
+  `installer-<hash8(patchVersion)>` performs no second injection and evaluates the
+  existing entry instead; two different `patchVersion` values produce two
+  differently named entries.
 - `EnsureSandboxUpgraded` under installer policy: `PreUpgrade` → `Installing` →
   `PostUpgrade` → `Succeeded`, with `Checkpointing` skipped and
   `CleanupCheckpoints` not called; `ResumeSucceed` advances to `PreUpgrade`
@@ -1625,8 +1615,9 @@ populate `ephemeralContainerStatuses`):
   *relative* symlink, and that running it uses the target's interpreter — proving
   the vendor install logic can be reused without `nsenter` and without executing
   anything from under the target rootfs.
-- **Relocatable Python control:** the
-  [Hermes Agent example image](#example-installer-image-hermes-agent), run twice —
+- **Relocatable Python control:** the [Hermes Agent example
+  image](./20261029-agent-harness-upgrade-survey.md#example-installer-image-hermes-agent),
+  run twice —
   once without `--relocatable` (must exit 126 on the absolute-path assertion) and
   once with it (must succeed, and `hermes --version` must run inside the target).
   This is the only test that proves the third failure class is caught rather than
@@ -1642,6 +1633,14 @@ populate `ephemeralContainerStatuses`):
   not on the image layer. Path resolution through the magic symlink follows the
   target's mount tree, so this is expected to work, but it is runtime-dependent
   and it underpins the PVC durability pattern.
+- **Way-B restart path:** the same installer image with
+  `installer.securityContext.capabilities.add: ["SYS_PTRACE", "SYS_ADMIN"]` and a
+  command ending in `nsenter -t 1 -m -p -i -n -- sh -c 'cd / && <harness> restart'`.
+  Assert the restart is reported through `Installing` rather than `PostUpgrade`,
+  and that a deliberately failing restart command yields `InstallingFailed` with
+  the new files already in place and no retry — the behavioural difference the
+  Overview table claims. A sibling case with `privileged: true` must be rejected at
+  admission.
 - Batch of two with `maxUnavailable: 1`: strictly serial, and the injected
   ephemeral container names differ per sandbox.
 - `Paused` sandbox with `stateFilter: [Running, Paused]`: resumes, installs,
@@ -1731,6 +1730,68 @@ individually.
       only on an empty raw patch (`pkg/controller/sandboxupdateops/patch.go:77`),
       so the example omits it. The `SandboxUpgradePolicy` and `SandboxStatus`
       declarations remain in Go.
+- [ ] 10/29/2026: Moved the harness survey detail out to a companion document,
+      `docs/proposals/20261029-agent-harness-upgrade-survey.md`, leaving only the
+      conclusions here: the per-harness install-location and air-gap tables, the
+      npm prefix and `--offline` verification transcripts, the `uv` relocatability
+      evidence and the worked Hermes Agent installer image all moved, and the 19
+      harness and toolchain references moved with them. Heading names in
+      Background were preserved so existing anchors kept resolving; the two links
+      that pointed at the moved example were retargeted at the survey. Corrected
+      five stale `pkg/controller/sandbox/core/lifecycle_handler.go` line citations
+      found while cross-referencing the restart step (`:44`/`:70`/`:79` → `:49` for
+      the root identity of the upgrade hook path, `:106` for the envd execution).
+- [ ] 10/29/2026: Expanded **Overview** to state the upgrade as its two constituent
+      steps — *replace the harness files*, then *restart the harness process* —
+      with what each runs in, what each may execute, the capability each needs, how
+      each fails, and which condition reason each maps to. The split was already
+      implicit in the design and in the survey's finding that every harness
+      upgrades by file replacement followed by a restart, but the proposal never
+      named it, which made the reason `Installing` success is not upgrade success
+      hard to see.
+- [ ] 10/29/2026: Documented both ways to perform the restart step in
+      **Overview** — way A, the default `spec.lifecycle.postUpgrade.exec` hook run
+      by envd inside the target with no capability; and way B, an operator opt-in
+      `nsenter -t 1 -m -p -i -n` inside the installer command, which requires a
+      self-granted `CAP_SYS_ADMIN` and collapses the restart into the
+      `Installing` state. Way B was already permitted by
+      [Alternatives](#alternatives) and by the `installer.securityContext`
+      validation rule, but it was only described as a rejected default, so the
+      Overview read as if `postUpgrade` were the sole path. The comparison table
+      gained a third column rather than a footnote, because the difference that
+      matters operationally — a way-B restart failure is reported as
+      `InstallingFailed` and is never retried — is only visible side by side.
+      Added a matching E2E control to the test plan, since that difference in
+      condition reason and retry behaviour is otherwise asserted only in prose.
+- [ ] 10/29/2026: Recorded as an explicit **Non-Goal** that this proposal does not
+      change how a sandbox's container command is constructed, and pointed the
+      "harness must not be PID 1" requirement at
+      [openkruise/agents#1130](https://github.com/openkruise/agents/pull/1130)
+      (dynamic env injection), which already rewrites `containers[0]`'s command
+      with the `run_with_envs.sh` wrapper and is the natural place to guarantee
+      the shape by construction. Verified against the PR diff that the wrapper
+      currently ends in `exec "${USER_CMD[@]}"`, so as drafted it hands PID 1 to
+      the harness rather than keeping it; that gap is stated here instead of
+      implying #1130 already solves it. Cross-linked from
+      [PID 1 in the target container](#pid-1-in-the-target-container) and added to
+      References.
+- [ ] 10/29/2026: Removed the installer attempt mechanism entirely. There is now at
+      most one ephemeral container per `patchVersion`, named
+      `installer-<hash8(patchVersion)>`, and every non-zero outcome is terminal for
+      that patch version; recovery is a new ops object. Dropped the
+      `--installer-max-attempts` flag, the `SANDBOX_INSTALLER_ATTEMPT` environment
+      variable and the attempt suffix on the container name, and re-derived the
+      idempotency guarantee from the name itself: because it is a deterministic
+      function of `patchVersion`, a requeue after a partial write finds the entry
+      already present and skips injection, which is the only property the attempt
+      counter was actually providing. `ImagePullBackOff` now waits on the kubelet's
+      own pull backoff rather than triggering a re-injection, so
+      `installer.timeoutSeconds` is measured from entry into `Installing` instead of
+      from `State.Running.StartedAt`, which does not exist for a container that
+      never started. The rationale is that re-injection cannot undo anything — an
+      ephemeral container cannot be removed, restarted or replaced — so a second
+      attempt only added a permanent entry to `pod.spec` on top of a filesystem
+      whose state was already unknown.
 - [ ] Verify the prefix-redirect pattern end-to-end against a real OpenClaw and a
       real Hermes Agent sandbox, including whether lifecycle scripts and native
       builds survive the libc-family match requirement, and whether
@@ -1752,27 +1813,10 @@ individually.
 - [KEP-495: Pod PID namespace sharing](https://github.com/kubernetes/enhancements/blob/master/keps/sig-node/495-pod-pid-namespace/README.md) — "Targeting a Specific Container's Namespace", CRI `NamespaceMode_TARGET`.
 - [containerd#5008: Support for TARGET NamespaceMode in CRI implementation](https://github.com/containerd/containerd/issues/5008) — implemented; see `internal/cri/server/container_create.go`.
 - [kubernetes#98362: Cannot enter the process namespace using kubectl debug with target parameter](https://github.com/kubernetes/kubernetes/issues/98362) — closed as completed.
-- [OpenClaw `update` CLI](https://docs.openclaw.ai/cli/update) — channels, `--yes`, `--no-restart`, `update status --json`, `NPM_CONFIG_PREFIX` override, and container-install behaviour.
-- [OpenClaw installer internals](https://docs.openclaw.ai/install/installer) — `install-cli.sh --prefix`, `OPENCLAW_PREFIX`, `OPENCLAW_HOME`, the non-interactive flags, and the mirror variables `OPENCLAW_INSTALL_NPM_REGISTRY`, `OPENCLAW_INSTALL_BUN_PIN_URL`, `OPENCLAW_INSTALL_BUN_RELEASE_BASE_URL`.
-- [OpenClaw other update methods](https://docs.openclaw.ai/install/updating/update-methods) — `openclaw update` installs into a temporary npm prefix, verifies the packaged `dist` inventory, then swaps it into the real global prefix; retries once with `--omit=optional`.
-- [anthropics/claude-code#39847: Complete Offline Installation](https://github.com/anthropics/claude-code/issues/39847) — requested, closed unimplemented.
-- [NousResearch/hermes-agent#17696: Support offline/air-gapped installation](https://github.com/NousResearch/hermes-agent/issues/17696) — **open**; "installation cannot be completed at all" without outbound network.
-- [uv settings reference](https://docs.astral.sh/uv/reference/settings/) — `UV_INDEX_URL`, `UV_NO_INDEX`, `UV_FIND_LINKS`, `UV_OFFLINE`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_DOWNLOADS`.
-- [npm config](https://docs.npmjs.com/cli/v9/using-npm/config) and [npm-pack](https://docs.npmjs.com/cli/v12/commands/npm-pack/) — `prefix` and global-mode install location; `registry`/`NPM_CONFIG_REGISTRY`, `offline`, `prefer-offline`, `cache`, and tarball creation. The prefix redirect, the registry override and `--offline` (`only-if-cached` → `ENOTCACHED`) were all verified empirically.
-- [OpenClaw install](https://docs.openclaw.ai/install) — the local-prefix installer as an alternative install method.
-- [OpenClaw updating](https://docs.openclaw.ai/install/updating) — `openclaw-install-owner.json`, owner values, and when updates are skipped.
-- [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) — `claude install [version]` takes a version, not a path.
-- [Claude Code advanced setup](https://code.claude.com/docs/en/setup) — `claude update`, `autoUpdatesChannel`.
-- [openai/codex#9274: Add codex upgrade command for self-updates](https://github.com/openai/codex/issues/9274).
-- [google-gemini/gemini-cli#18618: Add 'gemini update' command](https://github.com/google-gemini/gemini-cli/issues/18618) and the [Gemini CLI reference](https://geminicli.com/docs/cli/cli-reference/).
-- [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) — "The agent that grows with you"; Python, `uv`-managed environments.
-- [Hermes Agent — Installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation) — `~/.hermes`, `/opt/hermes`, `$PREFIX/lib/hermes`, and the `--dir` / `-InstallDir` / `-HermesHome` location flags.
-- [Hermes Agent — CLI commands](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) — `hermes update`, `--check`, `--backup` (`HERMES_HOME` snapshot).
 - `NousResearch/hermes-agent`, `hermes_cli/update_cmd_posix_pause.py` and `hermes_cli/update_cmd_fleet.py` — `hermes update` stops every gateway belonging to its install immediately before it first changes the checkout; `--no-gateway-restart` makes `arm_pause` return `None`, asserted by `tests/e2e/core/upgrade/git/test_hostile_pause.py::test_no_gateway_restart_stops_nothing_before_the_move`. This is the concrete case behind the PID-1 constraint.
-- [astral-sh/uv#13350: Shebang lines in scripts use absolute paths](https://github.com/astral-sh/uv/issues/13350) — the non-relocatable venv failure mode.
-- [astral-sh/uv#17770: Use relocatable virtual environments by default](https://github.com/astral-sh/uv/pull/17770) — preview-only, so `--relocatable` / `UV_VENV_RELOCATABLE` must be set explicitly.
-- [uv CLI reference](https://docs.astral.sh/uv/reference/cli/) — `uv venv --relocatable`.
 - [anthropics/claude-code#20361: claude command unavailable after npm auto-update](https://github.com/anthropics/claude-code/issues/20361) — evidence that file replacement and process restart must be separated.
+- [Agent Harness Upgrade Survey](./20261029-agent-harness-upgrade-survey.md) — the companion document holding the harness evidence this proposal summarises: per-harness install-location and air-gap tables, the npm prefix and `--offline` verification transcripts, the `uv` relocatability findings, and the worked Hermes Agent installer image. Its own [References](./20261029-agent-harness-upgrade-survey.md#references) carry the OpenClaw, Claude Code, Codex CLI, Gemini CLI, Hermes Agent, npm and uv citations.
+- [openkruise/agents#1130: revise dynamic env injection for warm-pool semantics](https://github.com/openkruise/agents/pull/1130) — `docs/proposals/20260701-dynamic-env-injection.md`. Owns the rewrite of `containers[0]`'s command through the `run_with_envs.sh` wrapper, and is therefore where the "harness must not be PID 1" constraint can be guaranteed by construction rather than by image authoring.
 - This repository: `docs/proposals/20251218-sandbox-inplace-update.md`,
   `docs/proposals/20260616-create-suo-command.md`,
   `docs/proposals/20260915-checkpoint-api-extension.md`,
